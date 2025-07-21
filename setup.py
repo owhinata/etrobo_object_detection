@@ -20,7 +20,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'ObjectDetectionNode = etrobo_object_detection.ObjectDetectionNode:main'
+            'etrobo_object_detection = etrobo_object_detection.etrobo_object_detection:main'
         ],
     },
 )
