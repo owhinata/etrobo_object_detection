@@ -15,11 +15,27 @@ public:
         return;
       }
 
-      // Set backend and target
+      // Set backend and target; disable layer fusion to avoid dynamic-ONNX shape issues
       net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
       net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+      net_.enableFusion(false);
 
       RCLCPP_INFO(this->get_logger(), "YOLO model loaded successfully");
+
+      // Log input layer information
+      std::vector<cv::String> layer_names = net_.getLayerNames();
+      std::vector<int> unconnected_layers = net_.getUnconnectedOutLayers();
+
+      RCLCPP_INFO(this->get_logger(), "Model has %zu layers",
+                  layer_names.size());
+      RCLCPP_INFO(this->get_logger(), "Number of output layers: %zu",
+                  unconnected_layers.size());
+
+      for (size_t i = 0; i < unconnected_layers.size(); ++i) {
+        std::string output_name = layer_names[unconnected_layers[i] - 1];
+        RCLCPP_INFO(this->get_logger(), "Output layer %zu: %s", i,
+                    output_name.c_str());
+      }
     } catch (const std::exception &e) {
       RCLCPP_ERROR(this->get_logger(), "Error loading model: %s", e.what());
     }
@@ -67,12 +83,49 @@ private:
     cv::dnn::blobFromImage(image, blob, 1.0 / 255.0, cv::Size(640, 640),
                            cv::Scalar(0, 0, 0), true, false);
 
+    // Log input blob shape
+    std::string input_shape = "Input blob shape: [";
+    for (int i = 0; i < blob.dims; ++i) {
+      if (i > 0)
+        input_shape += ", ";
+      input_shape += std::to_string(blob.size[i]);
+    }
+    input_shape += "]";
+    RCLCPP_INFO(this->get_logger(), "%s", input_shape.c_str());
+
     // Set input to the network
     net_.setInput(blob);
 
     // Run inference
     std::vector<cv::Mat> outputs;
-    net_.forward(outputs, net_.getUnconnectedOutLayersNames());
+    // Forward inference using output layer names
+    std::vector<cv::String> output_names = net_.getUnconnectedOutLayersNames();
+    RCLCPP_INFO(this->get_logger(), "Using %zu output layer names for forward", output_names.size());
+    for (size_t idx = 0; idx < output_names.size(); ++idx) {
+      RCLCPP_INFO(this->get_logger(), "Output name[%zu]: %s", idx, output_names[idx].c_str());
+    }
+    try {
+      net_.forward(outputs, output_names);
+      RCLCPP_INFO(this->get_logger(), "Forward completed successfully");
+    } catch (const cv::Exception& e) {
+      RCLCPP_ERROR(this->get_logger(), "OpenCV DNN error: %s", e.what());
+      return result;
+    }
+
+    // Log output shapes
+    RCLCPP_INFO(this->get_logger(), "Number of outputs: %zu", outputs.size());
+    for (size_t i = 0; i < outputs.size(); ++i) {
+      std::string output_shape = "Output " + std::to_string(i) + " shape: [";
+      for (int j = 0; j < outputs[i].dims; ++j) {
+        if (j > 0)
+          output_shape += ", ";
+        output_shape += std::to_string(outputs[i].size[j]);
+      }
+      output_shape += "]";
+      RCLCPP_INFO(this->get_logger(), "%s", output_shape.c_str());
+      RCLCPP_INFO(this->get_logger(), "Output %zu type: %s", i,
+                  outputs[i].type() == CV_32F ? "CV_32F" : "Other");
+    }
 
     // Process outputs and draw bounding boxes
     if (!outputs.empty()) {
@@ -92,7 +145,16 @@ private:
     std::vector<int> class_ids;
 
     // Parse detection outputs
-    for (const auto &output : outputs) {
+    for (size_t output_idx = 0; output_idx < outputs.size(); ++output_idx) {
+      const auto &output = outputs[output_idx];
+
+      // Log output shape before accessing
+      RCLCPP_INFO(this->get_logger(), "Processing output %zu:", output_idx);
+      RCLCPP_INFO(this->get_logger(), "Output dims: %d", output.dims);
+      for (int d = 0; d < output.dims; ++d) {
+        RCLCPP_INFO(this->get_logger(), "Dimension %d: %d", d, output.size[d]);
+      }
+
       const int rows = output.size[1];
       const int dimensions = output.size[2];
 
