@@ -81,7 +81,6 @@ private:
     // Medium priority parameters
     this->declare_parameter("input_topic", "/image_raw");
     this->declare_parameter("display_results", true);
-    this->declare_parameter("input_size", 320);
 
     // Get parameter values
     model_path_ = this->get_parameter("model_path").as_string();
@@ -90,7 +89,6 @@ private:
     nms_threshold_ = this->get_parameter("nms_threshold").as_double();
     input_topic_ = this->get_parameter("input_topic").as_string();
     display_results_ = this->get_parameter("display_results").as_bool();
-    input_size_ = this->get_parameter("input_size").as_int();
 
     // Log parameter values
     RCLCPP_INFO(this->get_logger(), "Parameters:");
@@ -101,7 +99,6 @@ private:
     RCLCPP_INFO(this->get_logger(), "  input_topic: %s", input_topic_.c_str());
     RCLCPP_INFO(this->get_logger(), "  display_results: %s",
                 display_results_ ? "true" : "false");
-    RCLCPP_INFO(this->get_logger(), "  input_size: %d", input_size_);
   }
 
   void setup_subscription() {
@@ -158,7 +155,7 @@ private:
     RCLCPP_INFO(this->get_logger(), "Number of inputs: %zu", num_input_nodes);
     RCLCPP_INFO(this->get_logger(), "Number of outputs: %zu", num_output_nodes);
 
-    // Log input info
+    // Log input info and extract input size
     auto input_type_info = session_->GetInputTypeInfo(0);
     auto input_tensor_info = input_type_info.GetTensorTypeAndShapeInfo();
     auto input_dims = input_tensor_info.GetShape();
@@ -176,6 +173,15 @@ private:
     }
     input_shape += "]";
     RCLCPP_INFO(this->get_logger(), "%s", input_shape.c_str());
+
+    // Extract input size from model (assuming square input: [batch, channels, height, width])
+    if (input_dims.size() >= 4) {
+      input_size_ = static_cast<int>(input_dims[2]); // height dimension
+      RCLCPP_INFO(this->get_logger(), "Auto-detected input size: %dx%d", input_size_, input_size_);
+    } else {
+      RCLCPP_ERROR(this->get_logger(), "Unexpected input tensor dimensions. Expected 4D tensor [batch, channels, height, width]");
+      input_size_ = 640; // fallback
+    }
 
     size_t input_elements = 1;
     for (size_t i = 0; i < input_dims.size(); ++i) {
@@ -499,7 +505,7 @@ private:
   double nms_threshold_;
   std::string input_topic_;
   bool display_results_;
-  int input_size_;
+  int input_size_; // Auto-detected from model
 
   // ONNX Runtime components
   std::unique_ptr<Ort::Env> env_;
