@@ -24,7 +24,7 @@ A ROS2 package for real-time object detection using YOLOv8 and ONNX Runtime, des
 - `cv_bridge`
 - `image_transport` 
 - `opencv4`
-- ONNX Runtime 1.21.0 (automatically downloaded during build)
+- ONNX Runtime 1.17.3 (automatically downloaded during build)
 
 ### Supported Architectures
 - **x86_64** (Intel/AMD 64-bit)
