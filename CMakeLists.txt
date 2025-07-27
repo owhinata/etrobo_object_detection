@@ -13,10 +13,27 @@ find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(OpenCV REQUIRED)
 
-# ONNX Runtime
-set(ONNXRUNTIME_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnxruntime-linux-x64-1.22.0)
-include_directories(${ONNXRUNTIME_ROOT}/include)
-link_directories(${ONNXRUNTIME_ROOT}/lib)
+# Download and extract ONNX Runtime at build time
+include(FetchContent)
+
+set(ONNXRUNTIME_VERSION "1.22.0")
+set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz")
+
+FetchContent_Declare(
+  onnxruntime
+  URL ${ONNXRUNTIME_URL}
+)
+
+FetchContent_MakeAvailable(onnxruntime)
+
+# Set ONNX Runtime paths
+set(ONNXRUNTIME_ROOT ${onnxruntime_SOURCE_DIR})
+set(ONNXRUNTIME_INCLUDE_DIR ${ONNXRUNTIME_ROOT}/include)
+set(ONNXRUNTIME_LIB_DIR ${ONNXRUNTIME_ROOT}/lib)
+
+# Include ONNX Runtime headers
+include_directories(${ONNXRUNTIME_INCLUDE_DIR})
+link_directories(${ONNXRUNTIME_LIB_DIR})
 
 # Include directories
 include_directories(${OpenCV_INCLUDE_DIRS})
@@ -30,12 +47,24 @@ target_link_libraries(etrobo_object_detection
   onnxruntime
 )
 
+# Set rpath for runtime library loading
+set_target_properties(etrobo_object_detection PROPERTIES
+  INSTALL_RPATH_USE_LINK_PATH TRUE
+  INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib"
+)
+
 ament_target_dependencies(etrobo_object_detection
   rclcpp
   sensor_msgs
   cv_bridge
   image_transport
 )
+
+# Install ONNX Runtime library
+install(FILES ${ONNXRUNTIME_LIB_DIR}/libonnxruntime.so.${ONNXRUNTIME_VERSION}
+        DESTINATION lib)
+install(FILES ${ONNXRUNTIME_LIB_DIR}/libonnxruntime.so
+        DESTINATION lib)
 
 # Install targets
 install(TARGETS

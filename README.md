@@ -24,7 +24,7 @@ A ROS2 package for real-time object detection using YOLOv8 and ONNX Runtime, des
 - `cv_bridge`
 - `image_transport` 
 - `opencv4`
-- ONNX Runtime 1.22.0 (included)
+- ONNX Runtime 1.22.0 (automatically downloaded during build)
 
 ## Installation
 
@@ -42,9 +42,12 @@ rosdep install --from-paths src --ignore-src -r -y
 
 ### 3. Build the Package
 ```bash
+# ONNX Runtime will be automatically downloaded during the first build
 colcon build --packages-select etrobo_object_detection
 source install/setup.bash
 ```
+
+**Note**: The first build will take longer as it downloads ONNX Runtime (~100MB). Subsequent builds will be faster.
 
 ## Model Preparation
 
