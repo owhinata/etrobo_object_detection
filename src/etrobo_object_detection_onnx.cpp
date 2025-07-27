@@ -1,18 +1,20 @@
+#include <chrono>
 #include <cv_bridge/cv_bridge.h>
+#include <iomanip>
+#include <map>
 #include <memory>
 #include <onnxruntime_cxx_api.h>
 #include <opencv2/opencv.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
-#include <vector>
-#include <chrono>
 #include <sstream>
-#include <iomanip>
-#include <map>
+#include <vector>
 
 class ObjectDetectionNode : public rclcpp::Node {
 public:
   ObjectDetectionNode() : Node("object_detection") {
+    // Initialize COCO class names
+    initializeCocoLabels();
     // Declare ROS2 parameters with default values
     declare_parameters();
 
@@ -33,6 +35,43 @@ public:
   }
 
 private:
+  void initializeCocoLabels() {
+    coco_labels_ = {"person",        "bicycle",      "car",
+                    "motorcycle",    "airplane",     "bus",
+                    "train",         "truck",        "boat",
+                    "traffic light", "fire hydrant", "stop sign",
+                    "parking meter", "bench",        "bird",
+                    "cat",           "dog",          "horse",
+                    "sheep",         "cow",          "elephant",
+                    "bear",          "zebra",        "giraffe",
+                    "backpack",      "umbrella",     "handbag",
+                    "tie",           "suitcase",     "frisbee",
+                    "skis",          "snowboard",    "sports ball",
+                    "kite",          "baseball bat", "baseball glove",
+                    "skateboard",    "surfboard",    "tennis racket",
+                    "bottle",        "wine glass",   "cup",
+                    "fork",          "knife",        "spoon",
+                    "bowl",          "banana",       "apple",
+                    "sandwich",      "orange",       "broccoli",
+                    "carrot",        "hot dog",      "pizza",
+                    "donut",         "cake",         "chair",
+                    "couch",         "potted plant", "bed",
+                    "dining table",  "toilet",       "tv",
+                    "laptop",        "mouse",        "remote",
+                    "keyboard",      "cell phone",   "microwave",
+                    "oven",          "toaster",      "sink",
+                    "refrigerator",  "book",         "clock",
+                    "vase",          "scissors",     "teddy bear",
+                    "hair drier",    "toothbrush"};
+  }
+
+  std::string getClassName(int class_id) {
+    if (class_id >= 0 && class_id < static_cast<int>(coco_labels_.size())) {
+      return coco_labels_[class_id];
+    }
+    return "unknown";
+  }
+
   void declare_parameters() {
     // High priority parameters
     this->declare_parameter("model_path", "yolov8n.onnx");
@@ -190,8 +229,9 @@ private:
     // Draw rectangle
     cv::rectangle(image, box, cv::Scalar(0, 255, 0), 2);
 
-    // Draw label
-    std::string label = "Class " + std::to_string(class_id) + ": " +
+    // Draw label with class name
+    std::string class_name = getClassName(class_id);
+    std::string label = class_name + ": " +
                         std::to_string(static_cast<int>(confidence * 100)) +
                         "%";
 
@@ -245,7 +285,7 @@ private:
   };
 
   struct DetectionResults {
-    std::map<int, int> class_counts;  // class_id -> count
+    std::map<int, int> class_counts; // class_id -> count
     int total_detections = 0;
   };
 
@@ -293,7 +333,7 @@ private:
 
   cv::Mat perform_detection(const cv::Mat &image) {
     cv::Mat result = image.clone();
-    
+
     // Timing measurements
     auto total_start = std::chrono::steady_clock::now();
     auto preprocess_start = std::chrono::steady_clock::now();
@@ -331,20 +371,30 @@ private:
         auto shape = tensor_info.GetShape();
 
         float *output_data = output_tensor.GetTensorMutableData<float>();
-        detection_results = process_yolo_output_with_results(result, output_data, shape, image.cols, image.rows);
+        detection_results = process_yolo_output_with_results(
+            result, output_data, shape, image.cols, image.rows);
       }
 
       auto postprocess_end = std::chrono::steady_clock::now();
       auto total_end = std::chrono::steady_clock::now();
 
       // Calculate timing
-      auto preprocess_ms = std::chrono::duration<double, std::milli>(preprocess_end - preprocess_start).count();
-      auto inference_ms = std::chrono::duration<double, std::milli>(inference_end - inference_start).count();
-      auto postprocess_ms = std::chrono::duration<double, std::milli>(postprocess_end - postprocess_start).count();
-      auto total_ms = std::chrono::duration<double, std::milli>(total_end - total_start).count();
+      auto preprocess_ms = std::chrono::duration<double, std::milli>(
+                               preprocess_end - preprocess_start)
+                               .count();
+      auto inference_ms = std::chrono::duration<double, std::milli>(
+                              inference_end - inference_start)
+                              .count();
+      auto postprocess_ms = std::chrono::duration<double, std::milli>(
+                                postprocess_end - postprocess_start)
+                                .count();
+      auto total_ms =
+          std::chrono::duration<double, std::milli>(total_end - total_start)
+              .count();
 
       // Log results in PyTorch YOLOv8 format
-      log_detection_results(detection_results, image.cols, image.rows, total_ms, preprocess_ms, inference_ms, postprocess_ms);
+      log_detection_results(detection_results, image.cols, image.rows, total_ms,
+                            preprocess_ms, inference_ms, postprocess_ms);
 
     } catch (const Ort::Exception &e) {
       RCLCPP_ERROR(this->get_logger(), "ONNX Runtime inference error: %s",
@@ -373,26 +423,28 @@ private:
     draw_detection_results(image, boxes, confidences, class_ids, indices);
   }
 
-  DetectionResults process_yolo_output_with_results(cv::Mat &image, float *output_data,
-                                                   const std::vector<int64_t> &shape, 
-                                                   int img_width, int img_height) {
+  DetectionResults
+  process_yolo_output_with_results(cv::Mat &image, float *output_data,
+                                   const std::vector<int64_t> &shape,
+                                   int img_width, int img_height) {
     std::vector<cv::Rect> boxes;
     std::vector<float> confidences;
     std::vector<int> class_ids;
 
     extract_detections(output_data, shape, confidence_threshold_, img_width,
-                      img_height, boxes, confidences, class_ids);
+                       img_height, boxes, confidences, class_ids);
 
     // Apply non-maximum suppression
     std::vector<int> indices;
-    cv::dnn::NMSBoxes(boxes, confidences, confidence_threshold_, nms_threshold_, indices);
+    cv::dnn::NMSBoxes(boxes, confidences, confidence_threshold_, nms_threshold_,
+                      indices);
 
     draw_detection_results(image, boxes, confidences, class_ids, indices);
 
     // Collect detection results
     DetectionResults results;
     results.total_detections = indices.size();
-    
+
     for (int idx : indices) {
       int class_id = class_ids[idx];
       results.class_counts[class_id]++;
@@ -401,29 +453,39 @@ private:
     return results;
   }
 
-  void log_detection_results(const DetectionResults &results, int img_width, int img_height,
-                            double total_ms, double preprocess_ms, double inference_ms, double postprocess_ms) {
-    // Build detection summary string (e.g., "2 boats, 1 handbag, 1 couch, 1 bed")
+  void log_detection_results(const DetectionResults &results, int img_width,
+                             int img_height, double total_ms,
+                             double preprocess_ms, double inference_ms,
+                             double postprocess_ms) {
+    // Build detection summary string with class names (e.g., "2 boats, 1
+    // handbag, 1 couch, 1 bed")
     std::stringstream detection_summary;
-    
+
     if (results.total_detections == 0) {
       detection_summary << "(no detections)";
     } else {
       bool first = true;
       for (const auto &pair : results.class_counts) {
-        if (!first) detection_summary << ", ";
-        detection_summary << pair.second << " class" << pair.first;
+        if (!first)
+          detection_summary << ", ";
+        std::string class_name = getClassName(pair.first);
+        std::string plural_suffix = (pair.second > 1) ? "s" : "";
+        detection_summary << pair.second << " " << class_name << plural_suffix;
         first = false;
       }
     }
-    
+
     // Format: "0: 480x640 2 boats, 1 handbag, 1 couch, 1 bed, 134.8ms"
-    RCLCPP_INFO(this->get_logger(), "0: %dx%d %s, %.1fms", 
-                img_width, img_height, detection_summary.str().c_str(), total_ms);
-    
-    // Format: "Speed: 1.0ms preprocess, 134.8ms inference, 0.7ms postprocess per image at shape (1, 3, 480, 640)"
-    RCLCPP_INFO(this->get_logger(), "Speed: %.1fms preprocess, %.1fms inference, %.1fms postprocess per image at shape (1, 3, %d, %d)",
-                preprocess_ms, inference_ms, postprocess_ms, img_height, img_width);
+    RCLCPP_INFO(this->get_logger(), "0: %dx%d %s, %.1fms", img_width,
+                img_height, detection_summary.str().c_str(), total_ms);
+
+    // Format: "Speed: 1.0ms preprocess, 134.8ms inference, 0.7ms postprocess
+    // per image at shape (1, 3, 480, 640)"
+    RCLCPP_INFO(this->get_logger(),
+                "Speed: %.1fms preprocess, %.1fms inference, %.1fms "
+                "postprocess per image at shape (1, 3, %d, %d)",
+                preprocess_ms, inference_ms, postprocess_ms, img_height,
+                img_width);
   }
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subscription_;
@@ -446,6 +508,9 @@ private:
   std::vector<std::string> output_names_;
   std::vector<const char *> input_node_names_;
   std::vector<const char *> output_node_names_;
+
+  // COCO class labels
+  std::vector<std::string> coco_labels_;
 };
 
 int main(int argc, char *argv[]) {
