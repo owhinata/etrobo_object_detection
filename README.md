@@ -114,6 +114,7 @@ etrobo_object_detection:
     model_path: "/path/to/yolov8n.onnx"
     confidence_threshold: 0.5
     nms_threshold: 0.4
+    num_threads: 2
     input_topic: "/image_raw"
     display_results: true
 ```
@@ -140,6 +141,7 @@ def generate_launch_description():
                 'model_path': '/path/to/yolov8n.onnx',
                 'confidence_threshold': 0.5,
                 'nms_threshold': 0.4,
+                'num_threads': 2,
                 'input_topic': '/camera/image_raw',
                 'display_results': True
             }]
@@ -155,6 +157,7 @@ def generate_launch_description():
 | `model_path` | string | `"yolov8n.onnx"` | Path to YOLOv8 ONNX model file |
 | `confidence_threshold` | double | `0.5` | Minimum confidence score for detections |
 | `nms_threshold` | double | `0.4` | Non-Maximum Suppression threshold |
+| `num_threads` | int | `2` | Number of threads for ONNX Runtime inference |
 
 ### Medium Priority Parameters  
 | Parameter | Type | Default | Description |
@@ -207,6 +210,7 @@ colcon test --packages-select etrobo_object_detection
 ### Runtime Optimization
 - Adjust confidence threshold based on use case
 - Consider input resolution vs. performance trade-offs
+- Tune `num_threads` parameter based on your CPU cores for optimal performance
 - Monitor CPU/GPU usage and adjust accordingly
 
 ## Troubleshooting

@@ -77,6 +77,7 @@ private:
     this->declare_parameter("model_path", "yolov8n.onnx");
     this->declare_parameter("confidence_threshold", 0.5);
     this->declare_parameter("nms_threshold", 0.4);
+    this->declare_parameter("num_threads", 2);
 
     // Medium priority parameters
     this->declare_parameter("input_topic", "/image_raw");
@@ -87,6 +88,7 @@ private:
     confidence_threshold_ =
         this->get_parameter("confidence_threshold").as_double();
     nms_threshold_ = this->get_parameter("nms_threshold").as_double();
+    num_threads_ = this->get_parameter("num_threads").as_int();
     input_topic_ = this->get_parameter("input_topic").as_string();
     display_results_ = this->get_parameter("display_results").as_bool();
 
@@ -96,6 +98,7 @@ private:
     RCLCPP_INFO(this->get_logger(), "  confidence_threshold: %.2f",
                 confidence_threshold_);
     RCLCPP_INFO(this->get_logger(), "  nms_threshold: %.2f", nms_threshold_);
+    RCLCPP_INFO(this->get_logger(), "  num_threads: %d", num_threads_);
     RCLCPP_INFO(this->get_logger(), "  input_topic: %s", input_topic_.c_str());
     RCLCPP_INFO(this->get_logger(), "  display_results: %s",
                 display_results_ ? "true" : "false");
@@ -118,7 +121,9 @@ private:
 
     // Create session options
     session_options_ = std::make_unique<Ort::SessionOptions>();
-    session_options_->SetIntraOpNumThreads(1);
+    session_options_->SetIntraOpNumThreads(num_threads_);
+    session_options_->SetInterOpNumThreads(num_threads_);
+    session_options_->SetExecutionMode(ExecutionMode::ORT_PARALLEL);
     session_options_->SetGraphOptimizationLevel(
         GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
 
@@ -503,6 +508,7 @@ private:
   std::string model_path_;
   double confidence_threshold_;
   double nms_threshold_;
+  int num_threads_;
   std::string input_topic_;
   bool display_results_;
   int input_size_; // Auto-detected from model
