@@ -81,6 +81,7 @@ private:
     // Medium priority parameters
     this->declare_parameter("input_topic", "/image_raw");
     this->declare_parameter("display_results", true);
+    this->declare_parameter("input_size", 320);
 
     // Get parameter values
     model_path_ = this->get_parameter("model_path").as_string();
@@ -89,6 +90,7 @@ private:
     nms_threshold_ = this->get_parameter("nms_threshold").as_double();
     input_topic_ = this->get_parameter("input_topic").as_string();
     display_results_ = this->get_parameter("display_results").as_bool();
+    input_size_ = this->get_parameter("input_size").as_int();
 
     // Log parameter values
     RCLCPP_INFO(this->get_logger(), "Parameters:");
@@ -99,6 +101,7 @@ private:
     RCLCPP_INFO(this->get_logger(), "  input_topic: %s", input_topic_.c_str());
     RCLCPP_INFO(this->get_logger(), "  display_results: %s",
                 display_results_ ? "true" : "false");
+    RCLCPP_INFO(this->get_logger(), "  input_size: %d", input_size_);
   }
 
   void setup_subscription() {
@@ -252,25 +255,25 @@ private:
                           int img_height, std::vector<cv::Rect> &boxes,
                           std::vector<float> &confidences,
                           std::vector<int> &class_ids) {
-    // YOLOv8 output shape: [1, 84, 8400]
-    int num_detections = shape[2]; // 8400
+    // YOLOv8 output shape: [1, 84, num_detections] (e.g., 2100 for 320x320, 8400 for 640x640)
+    int num_detections = shape[2]; 
     int num_features = shape[1];   // 84
 
     for (int i = 0; i < num_detections; ++i) {
-      // Access data using correct memory layout: channel * 8400 + anchor
-      float cx = output_data[0 * 8400 + i];
-      float cy = output_data[1 * 8400 + i];
-      float w = output_data[2 * 8400 + i];
-      float h = output_data[3 * 8400 + i];
+      // Access data using correct memory layout: channel * num_detections + anchor
+      float cx = output_data[0 * num_detections + i];
+      float cy = output_data[1 * num_detections + i];
+      float w = output_data[2 * num_detections + i];
+      float h = output_data[3 * num_detections + i];
 
-      auto class_result = find_best_class(output_data, i, num_features);
+      auto class_result = find_best_class(output_data, i, num_features, num_detections);
 
       if (class_result.confidence > confidence_threshold) {
         // Convert to actual image coordinates
-        int x = static_cast<int>((cx - w / 2) * img_width / 640);
-        int y = static_cast<int>((cy - h / 2) * img_height / 640);
-        int width = static_cast<int>(w * img_width / 640);
-        int height = static_cast<int>(h * img_height / 640);
+        int x = static_cast<int>((cx - w / 2) * img_width / input_size_);
+        int y = static_cast<int>((cy - h / 2) * img_height / input_size_);
+        int width = static_cast<int>(w * img_width / input_size_);
+        int height = static_cast<int>(h * img_height / input_size_);
 
         boxes.emplace_back(x, y, width, height);
         confidences.push_back(class_result.confidence);
@@ -290,12 +293,12 @@ private:
   };
 
   ClassResult find_best_class(float *output_data, int detection_idx,
-                              int num_features) {
+                              int num_features, int num_detections) {
     float max_class_score = 0.0f;
     int class_id = -1;
 
     for (int j = 4; j < num_features; ++j) {
-      float class_score = output_data[j * 8400 + detection_idx];
+      float class_score = output_data[j * num_detections + detection_idx];
       if (class_score > max_class_score) {
         max_class_score = class_score;
         class_id = j - 4;
@@ -341,12 +344,12 @@ private:
     try {
       // Preprocess image
       cv::Mat blob;
-      cv::dnn::blobFromImage(image, blob, 1.0 / 255.0, cv::Size(640, 640),
+      cv::dnn::blobFromImage(image, blob, 1.0 / 255.0, cv::Size(input_size_, input_size_),
                              cv::Scalar(0, 0, 0), true, false);
 
       // Prepare input tensor
-      std::vector<int64_t> input_shape = {1, 3, 640, 640};
-      size_t input_tensor_size = 1 * 3 * 640 * 640;
+      std::vector<int64_t> input_shape = {1, 3, input_size_, input_size_};
+      size_t input_tensor_size = 1 * 3 * input_size_ * input_size_;
 
       auto input_tensor = Ort::Value::CreateTensor<float>(
           *memory_info_, (float *)blob.data, input_tensor_size,
@@ -480,12 +483,12 @@ private:
                 img_height, detection_summary.str().c_str(), total_ms);
 
     // Format: "Speed: 1.0ms preprocess, 134.8ms inference, 0.7ms postprocess
-    // per image at shape (1, 3, 480, 640)"
+    // per image at shape (1, 3, 320, 320)"
     RCLCPP_INFO(this->get_logger(),
                 "Speed: %.1fms preprocess, %.1fms inference, %.1fms "
                 "postprocess per image at shape (1, 3, %d, %d)",
-                preprocess_ms, inference_ms, postprocess_ms, img_height,
-                img_width);
+                preprocess_ms, inference_ms, postprocess_ms, input_size_,
+                input_size_);
   }
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subscription_;
@@ -496,6 +499,7 @@ private:
   double nms_threshold_;
   std::string input_topic_;
   bool display_results_;
+  int input_size_;
 
   // ONNX Runtime components
   std::unique_ptr<Ort::Env> env_;

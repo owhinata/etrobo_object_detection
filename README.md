@@ -62,18 +62,22 @@ source install/setup.bash
 # Install ultralytics (if not already installed)
 pip install ultralytics
 
-# Download and convert YOLOv8 model to ONNX
-yolo export model=yolov8n.pt format=onnx imgsz=640 opset=12 dynamic=False
+# Download and convert YOLOv8 model to ONNX (320x320 for faster inference)
+yolo export model=yolov8n.pt format=onnx imgsz=320 opset=12 dynamic=False
+
+# Alternative input sizes:
+# yolo export model=yolov8n.pt format=onnx imgsz=640 opset=12 dynamic=False  # Higher accuracy
+# yolo export model=yolov8n.pt format=onnx imgsz=480 opset=12 dynamic=False  # Balanced
 
 # Alternative model sizes (optional):
-# yolo export model=yolov8s.pt format=onnx imgsz=640 opset=12 dynamic=False
-# yolo export model=yolov8m.pt format=onnx imgsz=640 opset=12 dynamic=False
-# yolo export model=yolov8l.pt format=onnx imgsz=640 opset=12 dynamic=False
-# yolo export model=yolov8x.pt format=onnx imgsz=640 opset=12 dynamic=False
+# yolo export model=yolov8s.pt format=onnx imgsz=320 opset=12 dynamic=False
+# yolo export model=yolov8m.pt format=onnx imgsz=320 opset=12 dynamic=False
+# yolo export model=yolov8l.pt format=onnx imgsz=320 opset=12 dynamic=False
+# yolo export model=yolov8x.pt format=onnx imgsz=320 opset=12 dynamic=False
 ```
 
 **Important Parameters:**
-- `imgsz=640`: Input image size (640x640)
+- `imgsz=320`: Input image size (320x320 for faster inference, 640x640 for higher accuracy)
 - `opset=12`: ONNX opset version for compatibility
 - `dynamic=False`: Fixed input shape for optimized inference
 
@@ -130,7 +134,8 @@ def generate_launch_description():
                 'confidence_threshold': 0.5,
                 'nms_threshold': 0.4,
                 'input_topic': '/camera/image_raw',
-                'display_results': True
+                'display_results': True,
+                'input_size': 320
             }]
         )
     ])
@@ -150,6 +155,7 @@ def generate_launch_description():
 |-----------|------|---------|-------------|
 | `input_topic` | string | `"/image_raw"` | Input image topic name |
 | `display_results` | bool | `true` | Enable/disable result visualization |
+| `input_size` | int | `320` | Model input size (320x320 for faster inference, 640x640 for higher accuracy) |
 
 ## Topics
 
