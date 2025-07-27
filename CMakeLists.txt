@@ -16,7 +16,7 @@ find_package(OpenCV REQUIRED)
 # Download and extract ONNX Runtime at build time
 include(FetchContent)
 
-set(ONNXRUNTIME_VERSION "1.21.0")
+set(ONNXRUNTIME_VERSION "1.17.3")
 
 # Detect target architecture
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
