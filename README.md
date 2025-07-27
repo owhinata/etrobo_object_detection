@@ -63,19 +63,30 @@ source install/setup.bash
 pip install ultralytics
 
 # Download and convert YOLOv8 model to ONNX
+# Input size is automatically detected from the model, so choose based on your performance needs:
+
+# For faster inference (recommended for real-time applications):
+yolo export model=yolov8n.pt format=onnx imgsz=320 opset=12 dynamic=False
+
+# For balanced performance:
+yolo export model=yolov8n.pt format=onnx imgsz=480 opset=12 dynamic=False
+
+# For higher accuracy:
 yolo export model=yolov8n.pt format=onnx imgsz=640 opset=12 dynamic=False
 
 # Alternative model sizes (optional):
-# yolo export model=yolov8s.pt format=onnx imgsz=640 opset=12 dynamic=False
-# yolo export model=yolov8m.pt format=onnx imgsz=640 opset=12 dynamic=False
-# yolo export model=yolov8l.pt format=onnx imgsz=640 opset=12 dynamic=False
-# yolo export model=yolov8x.pt format=onnx imgsz=640 opset=12 dynamic=False
+# yolo export model=yolov8s.pt format=onnx imgsz=320 opset=12 dynamic=False
+# yolo export model=yolov8m.pt format=onnx imgsz=320 opset=12 dynamic=False
+# yolo export model=yolov8l.pt format=onnx imgsz=320 opset=12 dynamic=False
+# yolo export model=yolov8x.pt format=onnx imgsz=320 opset=12 dynamic=False
 ```
 
 **Important Parameters:**
-- `imgsz=640`: Input image size (640x640)
+- `imgsz=320/480/640`: Input image size (automatically detected by the application)
 - `opset=12`: ONNX opset version for compatibility
 - `dynamic=False`: Fixed input shape for optimized inference
+
+**Note**: The application automatically detects the input size from the loaded ONNX model, so you don't need to configure it manually.
 
 ### Place Model File
 Copy the generated `yolov8n.onnx` file to your workspace or specify the full path using parameters.
@@ -150,6 +161,8 @@ def generate_launch_description():
 |-----------|------|---------|-------------|
 | `input_topic` | string | `"/image_raw"` | Input image topic name |
 | `display_results` | bool | `true` | Enable/disable result visualization |
+
+**Note**: Input size is automatically detected from the ONNX model - no manual configuration required.
 
 ## Topics
 
