@@ -9,6 +9,9 @@
 class ObjectDetectionNode : public rclcpp::Node {
 public:
   ObjectDetectionNode() : Node("object_detection") {
+    // Declare ROS2 parameters with default values
+    declare_parameters();
+
     try {
       initialize_onnx_runtime();
       setup_input_output_names();
@@ -22,17 +25,49 @@ public:
       return;
     }
 
-    // Create subscription
+    setup_subscription();
+  }
+
+private:
+  void declare_parameters() {
+    // High priority parameters
+    this->declare_parameter("model_path", "yolov8n.onnx");
+    this->declare_parameter("confidence_threshold", 0.5);
+    this->declare_parameter("nms_threshold", 0.4);
+
+    // Medium priority parameters
+    this->declare_parameter("input_topic", "/image_raw");
+    this->declare_parameter("display_results", true);
+
+    // Get parameter values
+    model_path_ = this->get_parameter("model_path").as_string();
+    confidence_threshold_ =
+        this->get_parameter("confidence_threshold").as_double();
+    nms_threshold_ = this->get_parameter("nms_threshold").as_double();
+    input_topic_ = this->get_parameter("input_topic").as_string();
+    display_results_ = this->get_parameter("display_results").as_bool();
+
+    // Log parameter values
+    RCLCPP_INFO(this->get_logger(), "Parameters:");
+    RCLCPP_INFO(this->get_logger(), "  model_path: %s", model_path_.c_str());
+    RCLCPP_INFO(this->get_logger(), "  confidence_threshold: %.2f",
+                confidence_threshold_);
+    RCLCPP_INFO(this->get_logger(), "  nms_threshold: %.2f", nms_threshold_);
+    RCLCPP_INFO(this->get_logger(), "  input_topic: %s", input_topic_.c_str());
+    RCLCPP_INFO(this->get_logger(), "  display_results: %s",
+                display_results_ ? "true" : "false");
+  }
+
+  void setup_subscription() {
     auto qos = rclcpp::QoS(rclcpp::KeepLast(10));
     qos.best_effort();
 
     subscription_ = this->create_subscription<sensor_msgs::msg::Image>(
-        "/image_raw", qos,
+        input_topic_, qos,
         std::bind(&ObjectDetectionNode::image_callback, this,
                   std::placeholders::_1));
   }
 
-private:
   void initialize_onnx_runtime() {
     // Initialize ONNX Runtime
     env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING,
@@ -45,9 +80,8 @@ private:
         GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
 
     // Load YOLO model
-    const char *model_path = "yolov8n.onnx";
-    session_ =
-        std::make_unique<Ort::Session>(*env_, model_path, *session_options_);
+    session_ = std::make_unique<Ort::Session>(*env_, model_path_.c_str(),
+                                              *session_options_);
 
     RCLCPP_INFO(this->get_logger(),
                 "ONNX Runtime YOLO model loaded successfully");
@@ -237,9 +271,11 @@ private:
       // Perform object detection
       cv::Mat result_img = perform_detection(img);
 
-      // Display result
-      cv::imshow("result", result_img);
-      cv::waitKey(1);
+      // Display result if enabled
+      if (display_results_) {
+        cv::imshow("result", result_img);
+        cv::waitKey(1);
+      }
 
     } catch (cv_bridge::Exception &e) {
       RCLCPP_WARN(this->get_logger(), "cv_bridge exception: %s", e.what());
@@ -289,25 +325,30 @@ private:
   void process_yolo_output(cv::Mat &image, float *output_data,
                            const std::vector<int64_t> &shape, int img_width,
                            int img_height) {
-    const float confidence_threshold = 0.5;
-    const float nms_threshold = 0.4;
 
     std::vector<cv::Rect> boxes;
     std::vector<float> confidences;
     std::vector<int> class_ids;
 
-    extract_detections(output_data, shape, confidence_threshold, img_width,
+    extract_detections(output_data, shape, confidence_threshold_, img_width,
                        img_height, boxes, confidences, class_ids);
 
     // Apply non-maximum suppression
     std::vector<int> indices;
-    cv::dnn::NMSBoxes(boxes, confidences, confidence_threshold, nms_threshold,
+    cv::dnn::NMSBoxes(boxes, confidences, confidence_threshold_, nms_threshold_,
                       indices);
 
     draw_detection_results(image, boxes, confidences, class_ids, indices);
   }
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subscription_;
+
+  // ROS2 parameters
+  std::string model_path_;
+  double confidence_threshold_;
+  double nms_threshold_;
+  std::string input_topic_;
+  bool display_results_;
 
   // ONNX Runtime components
   std::unique_ptr<Ort::Env> env_;
