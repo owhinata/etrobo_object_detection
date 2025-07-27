@@ -49,7 +49,7 @@ rosdep install --from-paths src --ignore-src -r -y
 ### 3. Build the Package
 ```bash
 # ONNX Runtime will be automatically downloaded during the first build
-colcon build --packages-select etrobo_object_detection
+colcon build --symlink-install --packages-select etrobo_object_detection
 source install/setup.bash
 ```
 
