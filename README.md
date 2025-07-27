@@ -24,7 +24,13 @@ A ROS2 package for real-time object detection using YOLOv8 and ONNX Runtime, des
 - `cv_bridge`
 - `image_transport` 
 - `opencv4`
-- ONNX Runtime 1.22.0 (automatically downloaded during build)
+- ONNX Runtime 1.21.0 (automatically downloaded during build)
+
+### Supported Architectures
+- **x86_64** (Intel/AMD 64-bit)
+- **aarch64** (ARM64, including Raspberry Pi 4/5)
+
+The build system automatically detects your architecture and downloads the appropriate ONNX Runtime binary.
 
 ## Installation
 
@@ -47,7 +53,7 @@ colcon build --packages-select etrobo_object_detection
 source install/setup.bash
 ```
 
-**Note**: The first build will take longer as it downloads ONNX Runtime (~100MB). Subsequent builds will be faster.
+**Note**: The first build will take longer as it downloads ONNX Runtime (~100MB for your architecture). The build system automatically detects whether you're on x86_64 or aarch64 and downloads the appropriate binary. Subsequent builds will be faster.
 
 ## Model Preparation
 
@@ -57,12 +63,19 @@ source install/setup.bash
 pip install ultralytics
 
 # Download and convert YOLOv8 model to ONNX
-python3 -c "
-from ultralytics import YOLO
-model = YOLO('yolov8n.pt')  # or yolov8s.pt, yolov8m.pt, yolov8l.pt, yolov8x.pt
-model.export(format='onnx', imgsz=640)
-"
+yolo export model=yolov8n.pt format=onnx imgsz=640 opset=12 dynamic=False
+
+# Alternative model sizes (optional):
+# yolo export model=yolov8s.pt format=onnx imgsz=640 opset=12 dynamic=False
+# yolo export model=yolov8m.pt format=onnx imgsz=640 opset=12 dynamic=False
+# yolo export model=yolov8l.pt format=onnx imgsz=640 opset=12 dynamic=False
+# yolo export model=yolov8x.pt format=onnx imgsz=640 opset=12 dynamic=False
 ```
+
+**Important Parameters:**
+- `imgsz=640`: Input image size (640x640)
+- `opset=12`: ONNX opset version for compatibility
+- `dynamic=False`: Fixed input shape for optimized inference
 
 ### Place Model File
 Copy the generated `yolov8n.onnx` file to your workspace or specify the full path using parameters.

@@ -16,8 +16,21 @@ find_package(OpenCV REQUIRED)
 # Download and extract ONNX Runtime at build time
 include(FetchContent)
 
-set(ONNXRUNTIME_VERSION "1.22.0")
-set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz")
+set(ONNXRUNTIME_VERSION "1.21.0")
+
+# Detect target architecture
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+  set(ONNXRUNTIME_ARCH "aarch64")
+  message(STATUS "Detected ARM64/aarch64 architecture")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+  set(ONNXRUNTIME_ARCH "x64")
+  message(STATUS "Detected x86_64 architecture")
+else()
+  message(FATAL_ERROR "Unsupported architecture: ${CMAKE_SYSTEM_PROCESSOR}. Only x86_64 and aarch64 are supported.")
+endif()
+
+set(ONNXRUNTIME_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-${ONNXRUNTIME_ARCH}-${ONNXRUNTIME_VERSION}.tgz")
+message(STATUS "ONNX Runtime URL: ${ONNXRUNTIME_URL}")
 
 FetchContent_Declare(
   onnxruntime
