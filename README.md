@@ -88,8 +88,48 @@ yolo export model=yolov8n.pt format=onnx imgsz=640 opset=12 dynamic=False
 
 **Note**: The application automatically detects the input size from the loaded ONNX model, so you don't need to configure it manually.
 
+### Model Quantization (Optional)
+
+For better performance and smaller model size, you can quantize the ONNX model to INT8:
+
+```python
+import onnxruntime as ort
+from onnxruntime.quantization import quantize_dynamic, QuantType
+import os
+
+def quantize_model():
+    model_fp32 = "yolov8n.onnx"
+    model_int8 = "yolov8n_int8.onnx"
+
+    quantize_dynamic(
+        model_input=model_fp32,
+        model_output=model_int8,
+        weight_type=QuantType.QUInt8
+    )
+
+    # サイズ比較
+    fp32_size = os.path.getsize(model_fp32) / 1024 / 1024
+    int8_size = os.path.getsize(model_int8) / 1024 / 1024
+
+    print(f"FP32: {fp32_size:.1f}MB → INT8: {int8_size:.1f}MB")
+    print(f"圧縮率: {fp32_size/int8_size:.1f}x")
+
+if __name__ == "__main__":
+    quantize_model()
+```
+
+Run the script to create a quantized model:
+```bash
+python quantize_model.py
+```
+
+The quantized model typically provides:
+- **~4x smaller file size**
+- **Faster inference speed**
+- **Minimal accuracy loss** (usually <2%)
+
 ### Place Model File
-Copy the generated `yolov8n.onnx` file to your workspace or specify the full path using parameters.
+Copy the generated `yolov8n.onnx` (or `yolov8n_int8.onnx` for quantized version) file to your workspace or specify the full path using parameters.
 
 ## Usage
 
