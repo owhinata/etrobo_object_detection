@@ -35,21 +35,26 @@ public:
 private:
   void initialize_onnx_runtime() {
     // Initialize ONNX Runtime
-    env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "ObjectDetection");
+    env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING,
+                                      "ObjectDetection");
 
     // Create session options
     session_options_ = std::make_unique<Ort::SessionOptions>();
     session_options_->SetIntraOpNumThreads(1);
-    session_options_->SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
+    session_options_->SetGraphOptimizationLevel(
+        GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
 
     // Load YOLO model
     const char *model_path = "yolov8n.onnx";
-    session_ = std::make_unique<Ort::Session>(*env_, model_path, *session_options_);
+    session_ =
+        std::make_unique<Ort::Session>(*env_, model_path, *session_options_);
 
-    RCLCPP_INFO(this->get_logger(), "ONNX Runtime YOLO model loaded successfully");
+    RCLCPP_INFO(this->get_logger(),
+                "ONNX Runtime YOLO model loaded successfully");
 
     // Get input/output info
-    auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+    auto memory_info =
+        Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
     memory_info_ = std::make_unique<Ort::MemoryInfo>(std::move(memory_info));
   }
 
@@ -79,12 +84,14 @@ private:
     auto input_dims = input_tensor_info.GetShape();
 
     RCLCPP_INFO(this->get_logger(), "=== INPUT TENSOR INFO ===");
-    RCLCPP_INFO(this->get_logger(), "Input name: %s", input_names_.back().c_str());
+    RCLCPP_INFO(this->get_logger(), "Input name: %s",
+                input_names_.back().c_str());
     RCLCPP_INFO(this->get_logger(), "Input dimensions: %zu", input_dims.size());
-    
+
     std::string input_shape = "Input shape: [";
     for (size_t i = 0; i < input_dims.size(); i++) {
-      if (i > 0) input_shape += ", ";
+      if (i > 0)
+        input_shape += ", ";
       input_shape += std::to_string(input_dims[i]);
     }
     input_shape += "]";
@@ -94,7 +101,8 @@ private:
     for (size_t i = 0; i < input_dims.size(); ++i) {
       input_elements *= input_dims[i];
     }
-    RCLCPP_INFO(this->get_logger(), "Input tensor elements: %zu", input_elements);
+    RCLCPP_INFO(this->get_logger(), "Input tensor elements: %zu",
+                input_elements);
 
     // Log output info
     auto output_type_info = session_->GetOutputTypeInfo(0);
@@ -102,12 +110,15 @@ private:
     auto output_dims = output_tensor_info.GetShape();
 
     RCLCPP_INFO(this->get_logger(), "=== OUTPUT TENSOR INFO (STATIC) ===");
-    RCLCPP_INFO(this->get_logger(), "Output name: %s", output_names_.back().c_str());
-    RCLCPP_INFO(this->get_logger(), "Output dimensions: %zu", output_dims.size());
-    
+    RCLCPP_INFO(this->get_logger(), "Output name: %s",
+                output_names_.back().c_str());
+    RCLCPP_INFO(this->get_logger(), "Output dimensions: %zu",
+                output_dims.size());
+
     std::string output_shape = "Output shape: [";
     for (size_t i = 0; i < output_dims.size(); i++) {
-      if (i > 0) output_shape += ", ";
+      if (i > 0)
+        output_shape += ", ";
       output_shape += std::to_string(output_dims[i]);
     }
     output_shape += "]";
@@ -117,50 +128,16 @@ private:
     for (size_t i = 0; i < output_dims.size(); ++i) {
       output_elements *= output_dims[i];
     }
-    RCLCPP_INFO(this->get_logger(), "Output tensor elements: %zu", output_elements);
+    RCLCPP_INFO(this->get_logger(), "Output tensor elements: %zu",
+                output_elements);
     RCLCPP_INFO(this->get_logger(), "==================");
   }
 
-  void log_inference_debug_info(const std::vector<int64_t> &shape, float *output_data) {
-    RCLCPP_INFO(this->get_logger(), "=== OUTPUT TENSOR INFO ===");
-    RCLCPP_INFO(this->get_logger(), "Output tensor dimensions: %zu", shape.size());
-    
-    std::string shape_str = "Output tensor shape: [";
-    for (size_t i = 0; i < shape.size(); ++i) {
-      if (i > 0) shape_str += ", ";
-      shape_str += std::to_string(shape[i]);
-    }
-    shape_str += "]";
-    RCLCPP_INFO(this->get_logger(), "%s", shape_str.c_str());
-
-    size_t total_elements = 1;
-    for (size_t i = 0; i < shape.size(); ++i) {
-      total_elements *= shape[i];
-    }
-    RCLCPP_INFO(this->get_logger(), "Total tensor elements: %zu", total_elements);
-
-    RCLCPP_INFO(this->get_logger(),
-                "First 10 raw values: %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f",
-                output_data[0], output_data[1], output_data[2], output_data[3], output_data[4],
-                output_data[5], output_data[6], output_data[7], output_data[8], output_data[9]);
-
-    // Test correct memory access pattern for [1, 84, 8400]
-    auto at = [&](int channel) -> float {
-      return output_data[channel * 8400 + 0]; // anchor 0
-    };
-
-    RCLCPP_INFO(this->get_logger(),
-                "anchor0 xywh=%.3f %.3f %.3f %.3f obj=%.3f cls0=%.3f cls79=%.3f",
-                at(0), at(1), at(2), at(3), at(4), at(5), at(83));
-
-    RCLCPP_INFO(this->get_logger(), "========================");
-  }
-
-  void draw_detection_results(cv::Mat &image, 
-                             const std::vector<cv::Rect> &boxes,
-                             const std::vector<float> &confidences,
-                             const std::vector<int> &class_ids,
-                             const std::vector<int> &indices) {
+  void draw_detection_results(cv::Mat &image,
+                              const std::vector<cv::Rect> &boxes,
+                              const std::vector<float> &confidences,
+                              const std::vector<int> &class_ids,
+                              const std::vector<int> &indices) {
     for (int idx : indices) {
       cv::Rect box = boxes[idx];
       float confidence = confidences[idx];
@@ -170,16 +147,19 @@ private:
     }
   }
 
-  void draw_single_detection(cv::Mat &image, const cv::Rect &box, float confidence, int class_id) {
+  void draw_single_detection(cv::Mat &image, const cv::Rect &box,
+                             float confidence, int class_id) {
     // Draw rectangle
     cv::rectangle(image, box, cv::Scalar(0, 255, 0), 2);
 
     // Draw label
     std::string label = "Class " + std::to_string(class_id) + ": " +
-                        std::to_string(static_cast<int>(confidence * 100)) + "%";
-    
+                        std::to_string(static_cast<int>(confidence * 100)) +
+                        "%";
+
     int baseline;
-    cv::Size label_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
+    cv::Size label_size =
+        cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
 
     cv::rectangle(image, cv::Point(box.x, box.y - label_size.height - 10),
                   cv::Point(box.x + label_size.width, box.y),
@@ -190,9 +170,10 @@ private:
   }
 
   void extract_detections(float *output_data, const std::vector<int64_t> &shape,
-                         float confidence_threshold, int img_width, int img_height,
-                         std::vector<cv::Rect> &boxes, std::vector<float> &confidences,
-                         std::vector<int> &class_ids) {
+                          float confidence_threshold, int img_width,
+                          int img_height, std::vector<cv::Rect> &boxes,
+                          std::vector<float> &confidences,
+                          std::vector<int> &class_ids) {
     // YOLOv8 output shape: [1, 84, 8400]
     int num_detections = shape[2]; // 8400
     int num_features = shape[1];   // 84
@@ -225,10 +206,11 @@ private:
     int class_id;
   };
 
-  ClassResult find_best_class(float *output_data, int detection_idx, int num_features) {
+  ClassResult find_best_class(float *output_data, int detection_idx,
+                              int num_features) {
     float max_class_score = 0.0f;
     int class_id = -1;
-    
+
     for (int j = 4; j < num_features; ++j) {
       float class_score = output_data[j * 8400 + detection_idx];
       if (class_score > max_class_score) {
@@ -236,7 +218,7 @@ private:
         class_id = j - 4;
       }
     }
-    
+
     return {max_class_score, class_id};
   }
 
@@ -282,12 +264,9 @@ private:
           input_shape.data(), input_shape.size());
 
       // Run inference
-      RCLCPP_INFO(this->get_logger(), "Running ONNX inference...");
       auto output_tensors =
           session_->Run(Ort::RunOptions{nullptr}, input_node_names_.data(),
                         &input_tensor, 1, output_node_names_.data(), 1);
-
-      RCLCPP_INFO(this->get_logger(), "ONNX inference completed successfully");
 
       // Process output
       if (!output_tensors.empty()) {
@@ -296,8 +275,6 @@ private:
         auto shape = tensor_info.GetShape();
 
         float *output_data = output_tensor.GetTensorMutableData<float>();
-        log_inference_debug_info(shape, output_data);
-
         process_yolo_output(result, output_data, shape, image.cols, image.rows);
       }
 
@@ -319,12 +296,13 @@ private:
     std::vector<float> confidences;
     std::vector<int> class_ids;
 
-    extract_detections(output_data, shape, confidence_threshold, img_width, img_height,
-                      boxes, confidences, class_ids);
+    extract_detections(output_data, shape, confidence_threshold, img_width,
+                       img_height, boxes, confidences, class_ids);
 
     // Apply non-maximum suppression
     std::vector<int> indices;
-    cv::dnn::NMSBoxes(boxes, confidences, confidence_threshold, nms_threshold, indices);
+    cv::dnn::NMSBoxes(boxes, confidences, confidence_threshold, nms_threshold,
+                      indices);
 
     draw_detection_results(image, boxes, confidences, class_ids, indices);
   }
