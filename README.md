@@ -37,7 +37,7 @@ The build system automatically detects your architecture and downloads the appro
 ### 1. Clone the Repository
 ```bash
 cd ~/ros2_ws/src
-git clone <repository-url> etrobo_object_detection
+git clone https://github.com/owhinata/etrobo_object_detection.git
 ```
 
 ### 2. Install Dependencies
