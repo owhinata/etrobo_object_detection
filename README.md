@@ -1,11 +1,13 @@
 # etrobo_object_detection
 
-A ROS2 package for real-time object detection using YOLOv8 and ONNX Runtime, designed for ET Robocon applications.
+A ROS2 package for real-time object detection using YOLOv8 with ONNX Runtime and NCNN backends, designed for ET Robocon applications.
 
 ## Features
 
 - **YOLOv8 Object Detection**: High-performance object detection using YOLOv8 models
-- **ONNX Runtime Integration**: Optimized inference with ONNX Runtime C++ API
+- **Dual Backend Support**: 
+  - **ONNX Runtime**: Cross-platform optimized inference with ONNX Runtime C++ API
+  - **NCNN**: High-performance mobile inference framework with Vulkan support
 - **ROS2 Native**: Full ROS2 parameter support and standard message interfaces
 - **Configurable Parameters**: Flexible configuration for different use cases
 - **Real-time Performance**: Optimized for real-time robot applications
@@ -24,7 +26,13 @@ A ROS2 package for real-time object detection using YOLOv8 and ONNX Runtime, des
 - `cv_bridge`
 - `image_transport` 
 - `opencv4`
+
+#### For ONNX Runtime Backend
 - ONNX Runtime 1.17.3 (automatically downloaded during build)
+
+#### For NCNN Backend  
+- NCNN library (build and install from source)
+- OpenMP (`sudo apt install libomp-dev`)
 
 ### Supported Architectures
 - **x86_64** (Intel/AMD 64-bit)
@@ -57,7 +65,11 @@ source install/setup.bash
 
 ## Model Preparation
 
-### Download YOLOv8 Model
+This package supports two inference backends with different model formats:
+
+### ONNX Runtime Backend
+
+#### Download YOLOv8 ONNX Model
 ```bash
 # Install ultralytics (if not already installed)
 pip install ultralytics
@@ -128,12 +140,66 @@ The quantized model typically provides:
 - **Faster inference speed**
 - **Minimal accuracy loss** (usually <2%)
 
-### Place Model File
+#### Place ONNX Model File
 Copy the generated `yolov8n.onnx` (or `yolov8n_int8.onnx` for quantized version) file to your workspace or specify the full path using parameters.
+
+### NCNN Backend
+
+#### Download and Convert YOLOv8 Model for NCNN
+
+For NCNN backend, you need to convert YOLOv8 to NCNN format following these steps:
+
+```bash
+# 1. Install required tools
+pip3 install -U ultralytics pnnx ncnn
+
+# 2. Export YOLOv8 to TorchScript
+yolo export model=yolov8n.pt format=torchscript
+
+# 3. Convert TorchScript with static shape
+pnnx yolov8n.torchscript
+
+# 4. Modify yolov8n_pnnx.py for dynamic shape inference
+# Edit the generated yolov8n_pnnx.py file to modify tensor operations:
+# 
+# Before:
+#     v_165 = v_142.view(1, 144, 6400)
+#     v_166 = v_153.view(1, 144, 1600)
+#     v_167 = v_164.view(1, 144, 400)
+#     v_168 = torch.cat((v_165, v_166, v_167), dim=2)
+#     ...
+# 
+# After:
+#     v_165 = v_142.view(1, 144, -1).transpose(1, 2)
+#     v_166 = v_153.view(1, 144, -1).transpose(1, 2)
+#     v_167 = v_164.view(1, 144, -1).transpose(1, 2)
+#     v_168 = torch.cat((v_165, v_166, v_167), dim=1)
+#     return v_168
+
+# 5. Re-export YOLOv8 TorchScript with modifications
+python3 -c 'import yolov8n_pnnx; yolov8n_pnnx.export_torchscript()'
+
+# 6. Convert new TorchScript with dynamic shape support
+pnnx yolov8n_pnnx.py.pt inputshape=[1,3,640,640] inputshape2=[1,3,320,320]
+
+# 7. Rename output files to final NCNN model files
+mv yolov8n_pnnx.py.ncnn.param yolov8n.ncnn.param
+mv yolov8n_pnnx.py.ncnn.bin yolov8n.ncnn.bin
+```
+
+**Important Notes**:
+- The modification in step 4 is crucial for dynamic shape inference
+- You need to manually edit the generated Python file to change tensor operations
+- The final output will be a 2-dim tensor with dimensions [144, 8400] containing bounding box regression (16x4) and per-class scores (80 classes)
+
+#### Place NCNN Model Files
+Copy the generated `yolov8n.ncnn.param` and `yolov8n.ncnn.bin` files to your workspace or specify the full paths using parameters.
 
 ## Usage
 
 ### Basic Usage
+
+#### ONNX Runtime Backend
 ```bash
 # Run with default parameters
 ros2 run etrobo_object_detection etrobo_object_detection
@@ -146,8 +212,24 @@ ros2 run etrobo_object_detection etrobo_object_detection \
   -p input_topic:=/camera/image_raw
 ```
 
+#### NCNN Backend
+```bash
+# Run with default parameters
+ros2 run etrobo_object_detection etrobo_object_detection_ncnn
+
+# Run with custom parameters  
+ros2 run etrobo_object_detection etrobo_object_detection_ncnn \
+  --ros-args \
+  -p param_path:=/path/to/yolov8n.ncnn.param \
+  -p bin_path:=/path/to/yolov8n.ncnn.bin \
+  -p confidence_threshold:=0.3 \
+  -p use_vulkan:=true
+```
+
 ### Using Parameter File
-Create a parameter file `config.yaml`:
+
+#### ONNX Runtime Parameter File
+Create a parameter file `config_onnx.yaml`:
 ```yaml
 etrobo_object_detection:
   ros__parameters:
@@ -159,10 +241,30 @@ etrobo_object_detection:
     display_results: true
 ```
 
+#### NCNN Parameter File
+Create a parameter file `config_ncnn.yaml`:
+```yaml
+object_detection_ncnn:
+  ros__parameters:
+    param_path: "/path/to/yolov8n.ncnn.param"
+    bin_path: "/path/to/yolov8n.ncnn.bin"
+    confidence_threshold: 0.5
+    nms_threshold: 0.4
+    num_threads: 2
+    input_topic: "/image_raw"
+    display_results: true
+    use_vulkan: true
+```
+
 Run with parameter file:
 ```bash
+# ONNX Runtime
 ros2 run etrobo_object_detection etrobo_object_detection \
-  --ros-args --params-file config.yaml
+  --ros-args --params-file config_onnx.yaml
+
+# NCNN  
+ros2 run etrobo_object_detection etrobo_object_detection_ncnn \
+  --ros-args --params-file config_ncnn.yaml
 ```
 
 ### Launch File Example
@@ -191,7 +293,9 @@ def generate_launch_description():
 
 ## Parameters
 
-### High Priority Parameters
+### ONNX Runtime Backend Parameters
+
+#### High Priority Parameters
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `model_path` | string | `"yolov8n.onnx"` | Path to YOLOv8 ONNX model file |
@@ -199,13 +303,31 @@ def generate_launch_description():
 | `nms_threshold` | double | `0.4` | Non-Maximum Suppression threshold |
 | `num_threads` | int | `2` | Number of threads for ONNX Runtime inference |
 
-### Medium Priority Parameters  
+#### Medium Priority Parameters  
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `input_topic` | string | `"/image_raw"` | Input image topic name |
 | `display_results` | bool | `true` | Enable/disable result visualization |
 
-**Note**: Input size is automatically detected from the ONNX model - no manual configuration required.
+### NCNN Backend Parameters
+
+#### High Priority Parameters
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `param_path` | string | `"yolov8n.ncnn.param"` | Path to NCNN parameter file |
+| `bin_path` | string | `"yolov8n.ncnn.bin"` | Path to NCNN binary file |
+| `confidence_threshold` | double | `0.5` | Minimum confidence score for detections |
+| `nms_threshold` | double | `0.4` | Non-Maximum Suppression threshold |
+| `num_threads` | int | `2` | Number of threads for NCNN inference |
+
+#### Medium Priority Parameters  
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `input_topic` | string | `"/image_raw"` | Input image topic name |
+| `display_results` | bool | `true` | Enable/disable result visualization |
+| `use_vulkan` | bool | `true` | Enable Vulkan GPU acceleration |
+
+**Note**: Input size is automatically handled by the respective inference engines.
 
 ## Topics
 
@@ -290,8 +412,8 @@ ros2 run etrobo_object_detection etrobo_object_detection \
 ### Code Structure
 ```
 src/
-├── etrobo_object_detection_onnx.cpp  # Main C++ implementation
-└── etrobo_object_detection.cpp       # Legacy OpenCV DNN version
+├── etrobo_object_detection_onnx.cpp  # ONNX Runtime backend implementation
+└── etrobo_object_detection_ncnn.cpp  # NCNN backend implementation
 ```
 
 ### Adding New Features
@@ -324,5 +446,6 @@ For issues and questions:
 ## Acknowledgments
 
 - [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics) for the object detection model
-- [ONNX Runtime](https://onnxruntime.ai/) for optimized inference
+- [ONNX Runtime](https://onnxruntime.ai/) for cross-platform optimized inference
+- [NCNN](https://github.com/Tencent/ncnn) for high-performance mobile inference framework
 - ET Robocon community for requirements and testing
