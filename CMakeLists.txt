@@ -51,13 +51,32 @@ link_directories(${ONNXRUNTIME_LIB_DIR})
 # Include directories
 include_directories(${OpenCV_INCLUDE_DIRS})
 
+# Find NCNN library
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(NCNN REQUIRED ncnn)
+
+# Find OpenMP for NCNN
+find_package(OpenMP REQUIRED)
+
 # Create executable (ONNX Runtime version)
 add_executable(etrobo_object_detection src/etrobo_object_detection_onnx.cpp)
+
+# Create executable (NCNN version)
+add_executable(etrobo_object_detection_ncnn src/etrobo_object_detection_ncnn.cpp)
 
 # Specify libraries to link a library or executable target against
 target_link_libraries(etrobo_object_detection
   ${OpenCV_LIBRARIES}
   onnxruntime
+)
+
+# Specify libraries to link for NCNN version
+target_include_directories(etrobo_object_detection_ncnn PRIVATE ${NCNN_INCLUDE_DIRS})
+target_compile_options(etrobo_object_detection_ncnn PRIVATE ${NCNN_CFLAGS_OTHER})
+target_link_libraries(etrobo_object_detection_ncnn
+  ${OpenCV_LIBRARIES}
+  ${NCNN_LIBRARIES}
+  OpenMP::OpenMP_CXX
 )
 
 # Set rpath for runtime library loading
@@ -66,7 +85,19 @@ set_target_properties(etrobo_object_detection PROPERTIES
   INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib"
 )
 
+set_target_properties(etrobo_object_detection_ncnn PROPERTIES
+  INSTALL_RPATH_USE_LINK_PATH TRUE
+  INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib"
+)
+
 ament_target_dependencies(etrobo_object_detection
+  rclcpp
+  sensor_msgs
+  cv_bridge
+  image_transport
+)
+
+ament_target_dependencies(etrobo_object_detection_ncnn
   rclcpp
   sensor_msgs
   cv_bridge
@@ -82,6 +113,7 @@ install(FILES ${ONNXRUNTIME_LIB_DIR}/libonnxruntime.so
 # Install targets
 install(TARGETS
   etrobo_object_detection
+  etrobo_object_detection_ncnn
   DESTINATION lib/${PROJECT_NAME}
 )
 
