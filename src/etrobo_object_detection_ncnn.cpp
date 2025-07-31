@@ -76,16 +76,17 @@ private:
   void declare_parameters() {
     this->declare_parameter("param_path", "yolov8n.ncnn.param");
     this->declare_parameter("bin_path", "yolov8n.ncnn.bin");
-    this->declare_parameter("confidence_threshold", 0.5);
+    this->declare_parameter("confidence_threshold", 0.25);
     this->declare_parameter("nms_threshold", 0.4);
-    this->declare_parameter("num_threads", 2);
+    this->declare_parameter("num_threads", 1);
     this->declare_parameter("input_topic", "/image_raw");
     this->declare_parameter("display_results", true);
     this->declare_parameter("use_vulkan", true);
 
     param_path_ = this->get_parameter("param_path").as_string();
     bin_path_ = this->get_parameter("bin_path").as_string();
-    confidence_threshold_ = this->get_parameter("confidence_threshold").as_double();
+    confidence_threshold_ =
+        this->get_parameter("confidence_threshold").as_double();
     nms_threshold_ = this->get_parameter("nms_threshold").as_double();
     num_threads_ = this->get_parameter("num_threads").as_int();
     input_topic_ = this->get_parameter("input_topic").as_string();
@@ -95,12 +96,15 @@ private:
     RCLCPP_INFO(this->get_logger(), "Parameters:");
     RCLCPP_INFO(this->get_logger(), "  param_path: %s", param_path_.c_str());
     RCLCPP_INFO(this->get_logger(), "  bin_path: %s", bin_path_.c_str());
-    RCLCPP_INFO(this->get_logger(), "  confidence_threshold: %.2f", confidence_threshold_);
+    RCLCPP_INFO(this->get_logger(), "  confidence_threshold: %.2f",
+                confidence_threshold_);
     RCLCPP_INFO(this->get_logger(), "  nms_threshold: %.2f", nms_threshold_);
     RCLCPP_INFO(this->get_logger(), "  num_threads: %d", num_threads_);
     RCLCPP_INFO(this->get_logger(), "  input_topic: %s", input_topic_.c_str());
-    RCLCPP_INFO(this->get_logger(), "  display_results: %s", display_results_ ? "true" : "false");
-    RCLCPP_INFO(this->get_logger(), "  use_vulkan: %s", use_vulkan_ ? "true" : "false");
+    RCLCPP_INFO(this->get_logger(), "  display_results: %s",
+                display_results_ ? "true" : "false");
+    RCLCPP_INFO(this->get_logger(), "  use_vulkan: %s",
+                use_vulkan_ ? "true" : "false");
   }
 
   void setup_subscription() {
@@ -115,7 +119,7 @@ private:
 
   void initialize_ncnn_network() {
     net_ = std::make_unique<ncnn::Net>();
-    
+
     net_->opt.use_vulkan_compute = use_vulkan_;
     net_->opt.num_threads = num_threads_;
 
@@ -136,17 +140,19 @@ private:
     RCLCPP_INFO(this->get_logger(), "=== MODEL INFO ===");
     RCLCPP_INFO(this->get_logger(), "Param file: %s", param_path_.c_str());
     RCLCPP_INFO(this->get_logger(), "Model file: %s", bin_path_.c_str());
-    RCLCPP_INFO(this->get_logger(), "Vulkan enabled: %s", use_vulkan_ ? "true" : "false");
+    RCLCPP_INFO(this->get_logger(), "Vulkan enabled: %s",
+                use_vulkan_ ? "true" : "false");
     RCLCPP_INFO(this->get_logger(), "Threads: %d", num_threads_);
     RCLCPP_INFO(this->get_logger(), "==================");
   }
 
-  static inline float intersection_area(const Object& a, const Object& b) {
+  static inline float intersection_area(const Object &a, const Object &b) {
     cv::Rect_<float> inter = a.rect & b.rect;
     return inter.area();
   }
 
-  static void qsort_descent_inplace(std::vector<Object>& objects, int left, int right) {
+  static void qsort_descent_inplace(std::vector<Object> &objects, int left,
+                                    int right) {
     int i = left;
     int j = right;
     float p = objects[(left + right) / 2].prob;
@@ -165,17 +171,20 @@ private:
       }
     }
 
-    if (left < j) qsort_descent_inplace(objects, left, j);
-    if (i < right) qsort_descent_inplace(objects, i, right);
+    if (left < j)
+      qsort_descent_inplace(objects, left, j);
+    if (i < right)
+      qsort_descent_inplace(objects, i, right);
   }
 
-  static void qsort_descent_inplace(std::vector<Object>& objects) {
+  static void qsort_descent_inplace(std::vector<Object> &objects) {
     if (objects.empty())
       return;
     qsort_descent_inplace(objects, 0, objects.size() - 1);
   }
 
-  static void nms_sorted_bboxes(const std::vector<Object>& objects, std::vector<int>& picked, float nms_threshold) {
+  static void nms_sorted_bboxes(const std::vector<Object> &objects,
+                                std::vector<int> &picked, float nms_threshold) {
     picked.clear();
 
     const int n = objects.size();
@@ -185,11 +194,11 @@ private:
     }
 
     for (int i = 0; i < n; i++) {
-      const Object& a = objects[i];
+      const Object &a = objects[i];
 
       int keep = 1;
       for (int j = 0; j < (int)picked.size(); j++) {
-        const Object& b = objects[picked[j]];
+        const Object &b = objects[picked[j]];
 
         float inter_area = intersection_area(a, b);
         float union_area = areas[i] + areas[picked[j]] - inter_area;
@@ -202,11 +211,11 @@ private:
     }
   }
 
-  static inline float sigmoid(float x) {
-    return 1.0f / (1.0f + expf(-x));
-  }
+  static inline float sigmoid(float x) { return 1.0f / (1.0f + expf(-x)); }
 
-  void generate_proposals(const ncnn::Mat& pred, int stride, const ncnn::Mat& in_pad, float prob_threshold, std::vector<Object>& objects) {
+  void generate_proposals(const ncnn::Mat &pred, int stride,
+                          const ncnn::Mat &in_pad, float prob_threshold,
+                          std::vector<Object> &objects) {
     const int w = in_pad.w;
     const int h = in_pad.h;
 
@@ -223,7 +232,8 @@ private:
         int label = -1;
         float score = -FLT_MAX;
         {
-          const ncnn::Mat pred_score = pred_grid.range(reg_max_1 * 4, num_class);
+          const ncnn::Mat pred_score =
+              pred_grid.range(reg_max_1 * 4, num_class);
 
           for (int k = 0; k < num_class; k++) {
             float s = pred_score[k];
@@ -237,10 +247,11 @@ private:
         }
 
         if (score >= prob_threshold) {
-          ncnn::Mat pred_bbox = pred_grid.range(0, reg_max_1 * 4).reshape(reg_max_1, 4);
+          ncnn::Mat pred_bbox =
+              pred_grid.range(0, reg_max_1 * 4).reshape(reg_max_1, 4);
 
           {
-            ncnn::Layer* softmax = ncnn::create_layer("Softmax");
+            ncnn::Layer *softmax = ncnn::create_layer("Softmax");
             ncnn::ParamDict pd;
             pd.set(0, 1);
             pd.set(1, 1);
@@ -260,7 +271,7 @@ private:
           float pred_ltrb[4];
           for (int k = 0; k < 4; k++) {
             float dis = 0.f;
-            const float* dis_after_sm = pred_bbox.row(k);
+            const float *dis_after_sm = pred_bbox.row(k);
             for (int l = 0; l < reg_max_1; l++) {
               dis += l * dis_after_sm[l];
             }
@@ -289,7 +300,10 @@ private:
     }
   }
 
-  void generate_proposals(const ncnn::Mat& pred, const std::vector<int>& strides, const ncnn::Mat& in_pad, float prob_threshold, std::vector<Object>& objects) {
+  void generate_proposals(const ncnn::Mat &pred,
+                          const std::vector<int> &strides,
+                          const ncnn::Mat &in_pad, float prob_threshold,
+                          std::vector<Object> &objects) {
     const int w = in_pad.w;
     const int h = in_pad.h;
 
@@ -301,13 +315,14 @@ private:
       const int num_grid_y = h / stride;
       const int num_grid = num_grid_x * num_grid_y;
 
-      generate_proposals(pred.row_range(pred_row_offset, num_grid), stride, in_pad, prob_threshold, objects);
+      generate_proposals(pred.row_range(pred_row_offset, num_grid), stride,
+                         in_pad, prob_threshold, objects);
       pred_row_offset += num_grid;
     }
   }
 
-  int detect_yolov8(const cv::Mat& bgr, std::vector<Object>& objects) {
-    const int target_size = 640;
+  int detect_yolov8(const cv::Mat &bgr, std::vector<Object> &objects) {
+    const int target_size = 320;
     const float prob_threshold = confidence_threshold_;
     const float nms_threshold = nms_threshold_;
 
@@ -333,12 +348,14 @@ private:
       w = w * scale;
     }
 
-    ncnn::Mat in = ncnn::Mat::from_pixels_resize(bgr.data, ncnn::Mat::PIXEL_BGR2RGB, img_w, img_h, w, h);
+    ncnn::Mat in = ncnn::Mat::from_pixels_resize(
+        bgr.data, ncnn::Mat::PIXEL_BGR2RGB, img_w, img_h, w, h);
 
     int wpad = (w + max_stride - 1) / max_stride * max_stride - w;
     int hpad = (h + max_stride - 1) / max_stride * max_stride - h;
     ncnn::Mat in_pad;
-    ncnn::copy_make_border(in, in_pad, hpad / 2, hpad - hpad / 2, wpad / 2, wpad - wpad / 2, ncnn::BORDER_CONSTANT, 114.f);
+    ncnn::copy_make_border(in, in_pad, hpad / 2, hpad - hpad / 2, wpad / 2,
+                           wpad - wpad / 2, ncnn::BORDER_CONSTANT, 114.f);
 
     const float norm_vals[3] = {1 / 255.f, 1 / 255.f, 1 / 255.f};
     in_pad.substract_mean_normalize(0, norm_vals);
@@ -359,14 +376,16 @@ private:
 
     int count = picked.size();
     objects.resize(count);
-    
+
     for (int i = 0; i < count; i++) {
       objects[i] = proposals[picked[i]];
 
       float x0 = (objects[i].rect.x - (wpad / 2)) / scale;
       float y0 = (objects[i].rect.y - (hpad / 2)) / scale;
-      float x1 = (objects[i].rect.x + objects[i].rect.width - (wpad / 2)) / scale;
-      float y1 = (objects[i].rect.y + objects[i].rect.height - (hpad / 2)) / scale;
+      float x1 =
+          (objects[i].rect.x + objects[i].rect.width - (wpad / 2)) / scale;
+      float y1 =
+          (objects[i].rect.y + objects[i].rect.height - (hpad / 2)) / scale;
 
       x0 = std::max(std::min(x0, (float)(img_w - 1)), 0.f);
       y0 = std::max(std::min(y0, (float)(img_h - 1)), 0.f);
@@ -382,17 +401,25 @@ private:
     return 0;
   }
 
-  void draw_detection_results(cv::Mat &image, const std::vector<Object> &objects) {
+  void draw_detection_results(cv::Mat &image,
+                              const std::vector<Object> &objects) {
     for (const auto &obj : objects) {
-      cv::rectangle(image, cv::Rect(obj.rect.x, obj.rect.y, obj.rect.width, obj.rect.height), cv::Scalar(0, 255, 0), 2);
+      cv::rectangle(
+          image,
+          cv::Rect(obj.rect.x, obj.rect.y, obj.rect.width, obj.rect.height),
+          cv::Scalar(0, 255, 0), 2);
 
       std::string class_name = getClassName(obj.label);
-      std::string label = class_name + ": " + std::to_string(static_cast<int>(obj.prob * 100)) + "%";
+      std::string label = class_name + ": " +
+                          std::to_string(static_cast<int>(obj.prob * 100)) +
+                          "%";
 
       int baseline;
-      cv::Size label_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
+      cv::Size label_size =
+          cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
 
-      cv::rectangle(image, cv::Point(obj.rect.x, obj.rect.y - label_size.height - 10),
+      cv::rectangle(image,
+                    cv::Point(obj.rect.x, obj.rect.y - label_size.height - 10),
                     cv::Point(obj.rect.x + label_size.width, obj.rect.y),
                     cv::Scalar(0, 255, 0), -1);
 
@@ -406,7 +433,8 @@ private:
     int total_detections = 0;
   };
 
-  DetectionResults process_detection_results(const std::vector<Object> &objects) {
+  DetectionResults
+  process_detection_results(const std::vector<Object> &objects) {
     DetectionResults results;
     results.total_detections = objects.size();
 
@@ -442,7 +470,7 @@ private:
 
     RCLCPP_INFO(this->get_logger(),
                 "Speed: %.1fms preprocess, %.1fms inference, %.1fms "
-                "postprocess per image at shape (1, 3, 640, 640)",
+                "postprocess per image at shape (1, 3, 320, 320)",
                 preprocess_ms, inference_ms, postprocess_ms);
   }
 
