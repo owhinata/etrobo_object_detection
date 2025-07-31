@@ -238,7 +238,7 @@ etrobo_object_detection:
     nms_threshold: 0.4
     num_threads: 2
     input_topic: "/image_raw"
-    display_results: true
+    output_topic: "/object_detection/image/compressed"
 ```
 
 #### NCNN Parameter File
@@ -252,7 +252,7 @@ object_detection_ncnn:
     nms_threshold: 0.4
     num_threads: 2
     input_topic: "/image_raw"
-    display_results: true
+    output_topic: "/object_detection/image/compressed"
     use_vulkan: true
 ```
 
@@ -285,7 +285,7 @@ def generate_launch_description():
                 'nms_threshold': 0.4,
                 'num_threads': 2,
                 'input_topic': '/camera/image_raw',
-                'display_results': True
+                'output_topic': '/object_detection/image/compressed'
             }]
         )
     ])
@@ -307,7 +307,7 @@ def generate_launch_description():
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `input_topic` | string | `"/image_raw"` | Input image topic name |
-| `display_results` | bool | `true` | Enable/disable result visualization |
+| `output_topic` | string | `"/object_detection/image/compressed"` | Output compressed image topic name |
 
 ### NCNN Backend Parameters
 
@@ -324,10 +324,13 @@ def generate_launch_description():
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `input_topic` | string | `"/image_raw"` | Input image topic name |
-| `display_results` | bool | `true` | Enable/disable result visualization |
+| `output_topic` | string | `"/object_detection/image/compressed"` | Output compressed image topic name |
 | `use_vulkan` | bool | `true` | Enable Vulkan GPU acceleration |
 
-**Note**: Input size is automatically handled by the respective inference engines.
+**Note**: 
+- Input size is automatically handled by the respective inference engines.
+- Output images are published only when there are subscribers to the output topic.
+- Images are compressed to JPEG format (quality 80%) to reduce bandwidth usage.
 
 ## Topics
 
@@ -335,7 +338,7 @@ def generate_launch_description():
 - `{input_topic}` (`sensor_msgs/Image`): Input camera images
 
 ### Published Topics
-Currently, this package focuses on visualization. Publishing detection results as ROS messages can be added as needed.
+- `{output_topic}` (`sensor_msgs/CompressedImage`): Detection result images with bounding boxes (JPEG compressed)
 
 ## Testing
 
@@ -360,6 +363,9 @@ colcon test --packages-select etrobo_object_detection
    ros2 launch etrobo_simulator simulation.launch.py
    ros2 run etrobo_object_detection etrobo_object_detection \
      --ros-args -p input_topic:=/camera/image_raw
+   
+   # View detection results
+   ros2 run rqt_image_view rqt_image_view /object_detection/image/compressed
    ```
 
 ## Performance Optimization

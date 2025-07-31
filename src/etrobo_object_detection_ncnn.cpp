@@ -6,6 +6,7 @@
 #include <opencv2/opencv.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <sstream>
 #include <vector>
 
@@ -33,6 +34,7 @@ public:
     }
 
     setup_subscription();
+    setup_publisher();
   }
 
 private:
@@ -80,7 +82,6 @@ private:
     this->declare_parameter("nms_threshold", 0.4);
     this->declare_parameter("num_threads", 1);
     this->declare_parameter("input_topic", "/image_raw");
-    this->declare_parameter("display_results", true);
     this->declare_parameter("use_vulkan", true);
 
     param_path_ = this->get_parameter("param_path").as_string();
@@ -90,8 +91,9 @@ private:
     nms_threshold_ = this->get_parameter("nms_threshold").as_double();
     num_threads_ = this->get_parameter("num_threads").as_int();
     input_topic_ = this->get_parameter("input_topic").as_string();
-    display_results_ = this->get_parameter("display_results").as_bool();
     use_vulkan_ = this->get_parameter("use_vulkan").as_bool();
+    this->declare_parameter("output_topic", "/object_detection/image/compressed");
+    output_topic_ = this->get_parameter("output_topic").as_string();
 
     RCLCPP_INFO(this->get_logger(), "Parameters:");
     RCLCPP_INFO(this->get_logger(), "  param_path: %s", param_path_.c_str());
@@ -101,10 +103,9 @@ private:
     RCLCPP_INFO(this->get_logger(), "  nms_threshold: %.2f", nms_threshold_);
     RCLCPP_INFO(this->get_logger(), "  num_threads: %d", num_threads_);
     RCLCPP_INFO(this->get_logger(), "  input_topic: %s", input_topic_.c_str());
-    RCLCPP_INFO(this->get_logger(), "  display_results: %s",
-                display_results_ ? "true" : "false");
     RCLCPP_INFO(this->get_logger(), "  use_vulkan: %s",
                 use_vulkan_ ? "true" : "false");
+    RCLCPP_INFO(this->get_logger(), "  output_topic: %s", output_topic_.c_str());
   }
 
   void setup_subscription() {
@@ -115,6 +116,14 @@ private:
         input_topic_, qos,
         std::bind(&ObjectDetectionNCNNNode::image_callback, this,
                   std::placeholders::_1));
+  }
+
+  void setup_publisher() {
+    auto qos = rclcpp::QoS(rclcpp::KeepLast(10));
+    qos.best_effort();
+
+    image_publisher_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
+        output_topic_, qos);
   }
 
   void initialize_ncnn_network() {
@@ -485,11 +494,12 @@ private:
         return;
       }
 
-      cv::Mat result_img = perform_detection(img);
-
-      if (display_results_) {
-        cv::imshow("result", result_img);
-        cv::waitKey(1);
+      if (image_publisher_->get_subscription_count() > 0) {
+        cv::Mat result_img = perform_detection(img, true);
+        publish_result_image(result_img);
+      } else {
+        // Perform detection without drawing (for logging purposes)
+        perform_detection(img, false);
       }
 
     } catch (cv_bridge::Exception &e) {
@@ -497,8 +507,11 @@ private:
     }
   }
 
-  cv::Mat perform_detection(const cv::Mat &image) {
-    cv::Mat result = image.clone();
+  cv::Mat perform_detection(const cv::Mat &image, bool draw_results = true) {
+    cv::Mat result;
+    if (draw_results) {
+      result = image.clone();
+    }
 
     auto total_start = std::chrono::steady_clock::now();
     auto preprocess_start = std::chrono::steady_clock::now();
@@ -512,8 +525,10 @@ private:
     auto inference_end = std::chrono::steady_clock::now();
     auto postprocess_start = std::chrono::steady_clock::now();
 
-    draw_detection_results(result, objects);
     DetectionResults detection_results = process_detection_results(objects);
+    if (draw_results) {
+      draw_detection_results(result, objects);
+    }
 
     auto postprocess_end = std::chrono::steady_clock::now();
     auto total_end = std::chrono::steady_clock::now();
@@ -537,7 +552,30 @@ private:
     return result;
   }
 
+  void publish_result_image(const cv::Mat &image) {
+    try {
+      // Compress image to JPEG
+      std::vector<uchar> buffer;
+      std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};
+      cv::imencode(".jpg", image, buffer, params);
+
+      // Create compressed image message
+      auto msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
+      msg->header.stamp = this->get_clock()->now();
+      msg->header.frame_id = "camera_frame";
+      msg->format = "jpeg";
+      msg->data = buffer;
+
+      // Publish the compressed image
+      image_publisher_->publish(std::move(msg));
+
+    } catch (const std::exception &e) {
+      RCLCPP_WARN(this->get_logger(), "Failed to publish result image: %s", e.what());
+    }
+  }
+
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subscription_;
+  rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr image_publisher_;
 
   std::string param_path_;
   std::string bin_path_;
@@ -545,7 +583,7 @@ private:
   double nms_threshold_;
   int num_threads_;
   std::string input_topic_;
-  bool display_results_;
+  std::string output_topic_;
   bool use_vulkan_;
 
   std::unique_ptr<ncnn::Net> net_;

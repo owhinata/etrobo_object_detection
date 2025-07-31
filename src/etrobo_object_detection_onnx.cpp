@@ -7,6 +7,7 @@
 #include <opencv2/opencv.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <sstream>
 #include <vector>
 
@@ -32,6 +33,7 @@ public:
     }
 
     setup_subscription();
+    setup_publisher();
   }
 
 private:
@@ -81,7 +83,6 @@ private:
 
     // Medium priority parameters
     this->declare_parameter("input_topic", "/image_raw");
-    this->declare_parameter("display_results", true);
 
     // Get parameter values
     model_path_ = this->get_parameter("model_path").as_string();
@@ -90,7 +91,8 @@ private:
     nms_threshold_ = this->get_parameter("nms_threshold").as_double();
     num_threads_ = this->get_parameter("num_threads").as_int();
     input_topic_ = this->get_parameter("input_topic").as_string();
-    display_results_ = this->get_parameter("display_results").as_bool();
+    this->declare_parameter("output_topic", "/object_detection/image/compressed");
+    output_topic_ = this->get_parameter("output_topic").as_string();
 
     // Log parameter values
     RCLCPP_INFO(this->get_logger(), "Parameters:");
@@ -100,8 +102,7 @@ private:
     RCLCPP_INFO(this->get_logger(), "  nms_threshold: %.2f", nms_threshold_);
     RCLCPP_INFO(this->get_logger(), "  num_threads: %d", num_threads_);
     RCLCPP_INFO(this->get_logger(), "  input_topic: %s", input_topic_.c_str());
-    RCLCPP_INFO(this->get_logger(), "  display_results: %s",
-                display_results_ ? "true" : "false");
+    RCLCPP_INFO(this->get_logger(), "  output_topic: %s", output_topic_.c_str());
   }
 
   void setup_subscription() {
@@ -112,6 +113,14 @@ private:
         input_topic_, qos,
         std::bind(&ObjectDetectionNode::image_callback, this,
                   std::placeholders::_1));
+  }
+
+  void setup_publisher() {
+    auto qos = rclcpp::QoS(rclcpp::KeepLast(10));
+    qos.best_effort();
+
+    image_publisher_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
+        output_topic_, qos);
   }
 
   void initialize_onnx_runtime() {
@@ -331,13 +340,13 @@ private:
         return;
       }
 
-      // Perform object detection
-      cv::Mat result_img = perform_detection(img);
-
-      // Display result if enabled
-      if (display_results_) {
-        cv::imshow("result", result_img);
-        cv::waitKey(1);
+      // Perform object detection and publish result if there are subscribers
+      if (image_publisher_->get_subscription_count() > 0) {
+        cv::Mat result_img = perform_detection(img, true);
+        publish_result_image(result_img);
+      } else {
+        // Perform detection without drawing (for logging purposes)
+        perform_detection(img, false);
       }
 
     } catch (cv_bridge::Exception &e) {
@@ -345,8 +354,11 @@ private:
     }
   }
 
-  cv::Mat perform_detection(const cv::Mat &image) {
-    cv::Mat result = image.clone();
+  cv::Mat perform_detection(const cv::Mat &image, bool draw_results = true) {
+    cv::Mat result;
+    if (draw_results) {
+      result = image.clone();
+    }
 
     // Timing measurements
     auto total_start = std::chrono::steady_clock::now();
@@ -385,8 +397,13 @@ private:
         auto shape = tensor_info.GetShape();
 
         float *output_data = output_tensor.GetTensorMutableData<float>();
-        detection_results = process_yolo_output_with_results(
-            result, output_data, shape, image.cols, image.rows);
+        if (draw_results) {
+          detection_results = process_yolo_output_with_results(
+              result, output_data, shape, image.cols, image.rows);
+        } else {
+          detection_results = process_yolo_output_no_draw(
+              output_data, shape, image.cols, image.rows);
+        }
       }
 
       auto postprocess_end = std::chrono::steady_clock::now();
@@ -416,6 +433,55 @@ private:
     }
 
     return result;
+  }
+
+  DetectionResults process_yolo_output_no_draw(float *output_data,
+                                               const std::vector<int64_t> &shape,
+                                               int img_width, int img_height) {
+    std::vector<cv::Rect> boxes;
+    std::vector<float> confidences;
+    std::vector<int> class_ids;
+
+    extract_detections(output_data, shape, confidence_threshold_, img_width,
+                       img_height, boxes, confidences, class_ids);
+
+    // Apply non-maximum suppression
+    std::vector<int> indices;
+    cv::dnn::NMSBoxes(boxes, confidences, confidence_threshold_, nms_threshold_,
+                      indices);
+
+    // Collect detection results without drawing
+    DetectionResults results;
+    results.total_detections = indices.size();
+
+    for (int idx : indices) {
+      int class_id = class_ids[idx];
+      results.class_counts[class_id]++;
+    }
+
+    return results;
+  }
+
+  void publish_result_image(const cv::Mat &image) {
+    try {
+      // Compress image to JPEG
+      std::vector<uchar> buffer;
+      std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};
+      cv::imencode(".jpg", image, buffer, params);
+
+      // Create compressed image message
+      auto msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
+      msg->header.stamp = this->get_clock()->now();
+      msg->header.frame_id = "camera_frame";
+      msg->format = "jpeg";
+      msg->data = buffer;
+
+      // Publish the compressed image
+      image_publisher_->publish(std::move(msg));
+
+    } catch (const std::exception &e) {
+      RCLCPP_WARN(this->get_logger(), "Failed to publish result image: %s", e.what());
+    }
   }
 
   void process_yolo_output(cv::Mat &image, float *output_data,
@@ -503,6 +569,7 @@ private:
   }
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subscription_;
+  rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr image_publisher_;
 
   // ROS2 parameters
   std::string model_path_;
@@ -510,7 +577,7 @@ private:
   double nms_threshold_;
   int num_threads_;
   std::string input_topic_;
-  bool display_results_;
+  std::string output_topic_;
   int input_size_; // Auto-detected from model
 
   // ONNX Runtime components
