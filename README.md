@@ -194,7 +194,7 @@ mv yolov8n_pnnx.py.ncnn.bin yolov8n.ncnn.bin
 - The final output will be a 2-dim tensor with dimensions [144, 8400] containing bounding box regression (16x4) and per-class scores (80 classes)
 
 #### Place NCNN Model Files
-Copy the generated `yolov8n.ncnn.param` and `yolov8n.ncnn.bin` files to your workspace or specify the full paths using parameters.
+Copy the generated `yolov8n.ncnn.param` and `yolov8n.ncnn.bin` files to your workspace. Specify the `.bin` file path using the `model_path` parameter - the corresponding `.param` file will be automatically located.
 
 ## Usage
 
@@ -221,8 +221,7 @@ ros2 run etrobo_object_detection etrobo_object_detection_ncnn
 # Run with custom parameters  
 ros2 run etrobo_object_detection etrobo_object_detection_ncnn \
   --ros-args \
-  -p param_path:=/path/to/yolov8n.ncnn.param \
-  -p bin_path:=/path/to/yolov8n.ncnn.bin \
+  -p model_path:=/path/to/yolov8n.ncnn.bin \
   -p confidence_threshold:=0.3 \
   -p use_vulkan:=true
 ```
@@ -256,8 +255,7 @@ Create a parameter file `config_ncnn.yaml`:
 object_detection_ncnn:
   ros__parameters:
     # Model parameters
-    param_path: "/path/to/yolov8n.ncnn.param"
-    bin_path: "/path/to/yolov8n.ncnn.bin"
+    model_path: "/path/to/yolov8n.ncnn.bin"
     input_size: 320
     
     # Inference parameters
@@ -342,8 +340,7 @@ def generate_launch_description():
 #### Model Parameters
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `param_path` | string | `"yolov8n.ncnn.param"` | Path to NCNN parameter file |
-| `bin_path` | string | `"yolov8n.ncnn.bin"` | Path to NCNN binary file |
+| `model_path` | string | `"yolov8n.ncnn.bin"` | Path to NCNN model file (.bin). Parameter file (.param) is auto-generated |
 | `input_size` | int | `320` | Input tensor size (width and height) |
 
 #### Inference Parameters

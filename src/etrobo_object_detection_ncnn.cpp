@@ -82,8 +82,7 @@ private:
 
   void declare_parameters() {
     // Model parameters
-    this->declare_parameter("param_path", "yolov8n.ncnn.param");
-    this->declare_parameter("bin_path", "yolov8n.ncnn.bin");
+    this->declare_parameter("model_path", "yolov8n.ncnn.bin");
     this->declare_parameter("input_size", 320);
     
     // Inference parameters
@@ -100,9 +99,17 @@ private:
     this->declare_parameter("output_topic", "/object_detection");
 
     // Get model parameters
-    param_path_ = this->get_parameter("param_path").as_string();
-    bin_path_ = this->get_parameter("bin_path").as_string();
+    model_path_ = this->get_parameter("model_path").as_string();
     input_size_ = this->get_parameter("input_size").as_int();
+    
+    // Generate param path by changing extension from .bin to .param
+    param_path_ = model_path_;
+    size_t last_dot = param_path_.find_last_of(".");
+    if (last_dot != std::string::npos) {
+      param_path_ = param_path_.substr(0, last_dot) + ".param";
+    } else {
+      param_path_ = param_path_ + ".param";
+    }
     
     // Get inference parameters
     confidence_threshold_ = this->get_parameter("confidence_threshold").as_double();
@@ -123,8 +130,7 @@ private:
 
     RCLCPP_INFO(this->get_logger(), "Parameters:");
     // Model parameters
-    RCLCPP_INFO(this->get_logger(), "  param_path: %s", param_path_.c_str());
-    RCLCPP_INFO(this->get_logger(), "  bin_path: %s", bin_path_.c_str());
+    RCLCPP_INFO(this->get_logger(), "  model_path: %s", model_path_.c_str());
     RCLCPP_INFO(this->get_logger(), "  input_size: %d", input_size_);
     
     // Inference parameters
@@ -186,9 +192,9 @@ private:
       throw std::runtime_error("Failed to load param file: " + param_path_);
     }
 
-    ret = net_->load_model(bin_path_.c_str());
+    ret = net_->load_model(model_path_.c_str());
     if (ret != 0) {
-      throw std::runtime_error("Failed to load model file: " + bin_path_);
+      throw std::runtime_error("Failed to load model file: " + model_path_);
     }
 
     RCLCPP_INFO(this->get_logger(), "NCNN YOLO model loaded successfully");
@@ -197,7 +203,7 @@ private:
   void log_model_info() {
     RCLCPP_INFO(this->get_logger(), "=== MODEL INFO ===");
     RCLCPP_INFO(this->get_logger(), "Param file: %s", param_path_.c_str());
-    RCLCPP_INFO(this->get_logger(), "Model file: %s", bin_path_.c_str());
+    RCLCPP_INFO(this->get_logger(), "Model file: %s", model_path_.c_str());
     RCLCPP_INFO(this->get_logger(), "Vulkan enabled: %s",
                 use_vulkan_ ? "true" : "false");
     RCLCPP_INFO(this->get_logger(), "Threads: %d", num_threads_);
@@ -698,8 +704,8 @@ private:
       detection_publisher_;
 
   // Model parameters
-  std::string param_path_;
-  std::string bin_path_;
+  std::string model_path_;
+  std::string param_path_;  // Auto-generated from model_path
   int input_size_;
   
   // Inference parameters
