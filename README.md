@@ -23,6 +23,7 @@ A ROS2 package for real-time object detection using YOLOv8 with ONNX Runtime and
 ### Dependencies
 - `rclcpp`
 - `sensor_msgs`
+- `vision_msgs`
 - `cv_bridge`
 - `image_transport` 
 - `opencv4`
@@ -339,6 +340,93 @@ def generate_launch_description():
 
 ### Published Topics
 - `{output_topic}` (`sensor_msgs/CompressedImage`): Detection result images with bounding boxes (JPEG compressed)
+- `/object_detection/detections` (`vision_msgs/Detection2DArray`): Object detection results with bounding boxes, class IDs, and confidence scores
+
+### Detection Results Format
+
+The `/object_detection/detections` topic publishes detection results in the standard `vision_msgs/Detection2DArray` format, which includes:
+
+#### Message Structure
+```yaml
+header:
+  stamp:     # Timestamp from input image (preserves temporal accuracy)
+  frame_id:  # Frame ID from input image (or "camera_frame" if empty)
+detections:  # Array of detected objects
+  - bbox:    # Bounding box information
+      center:
+        position:
+          x: 320.5    # Center X coordinate (pixels)
+          y: 240.0    # Center Y coordinate (pixels)
+        theta: 0.0    # Rotation (always 0 for axis-aligned boxes)
+      size_x: 150.0   # Bounding box width (pixels)
+      size_y: 200.0   # Bounding box height (pixels)
+    results:           # Classification results
+      - hypothesis:
+          class_id: "0"      # COCO class ID (string format)
+          score: 0.85        # Confidence score (0.0-1.0)
+```
+
+#### COCO Class IDs
+The detection results use COCO dataset class IDs (0-79):
+- `0`: person, `1`: bicycle, `2`: car, `3`: motorcycle, `4`: airplane
+- `5`: bus, `6`: train, `7`: truck, `8`: boat, `9`: traffic light
+- ... (see [COCO classes](https://github.com/ultralytics/ultralytics/blob/main/ultralytics/cfg/datasets/coco.yaml) for full list)
+
+#### Key Features
+- **Always Published**: Empty arrays are sent when no objects are detected
+- **Temporal Accuracy**: Uses original image timestamp, not processing completion time
+- **Standard Format**: Compatible with other ROS2 vision packages
+- **Complete Information**: Includes bounding boxes, confidence scores, and class labels
+
+### Usage Examples
+
+#### Subscribe to Detection Results
+```bash
+# View all detection messages
+ros2 topic echo /object_detection/detections
+
+# View detection headers only
+ros2 topic echo /object_detection/detections --field header
+
+# View detection count
+ros2 topic echo /object_detection/detections --field "len(detections)"
+```
+
+#### Process Detection Results in Code
+```python
+import rclpy
+from rclpy.node import Node
+from vision_msgs.msg import Detection2DArray
+
+class DetectionSubscriber(Node):
+    def __init__(self):
+        super().__init__('detection_subscriber')
+        self.subscription = self.create_subscription(
+            Detection2DArray,
+            '/object_detection/detections',
+            self.detection_callback,
+            10)
+
+    def detection_callback(self, msg):
+        self.get_logger().info(f'Received {len(msg.detections)} detections')
+        
+        for detection in msg.detections:
+            # Extract bounding box
+            center_x = detection.bbox.center.position.x
+            center_y = detection.bbox.center.position.y
+            width = detection.bbox.size_x
+            height = detection.bbox.size_y
+            
+            # Extract classification
+            if detection.results:
+                class_id = detection.results[0].hypothesis.class_id
+                confidence = detection.results[0].hypothesis.score
+                
+                self.get_logger().info(
+                    f'Object: class_id={class_id}, confidence={confidence:.2f}, '
+                    f'bbox=({center_x:.1f},{center_y:.1f},{width:.1f},{height:.1f})'
+                )
+```
 
 ## Testing
 
@@ -366,6 +454,9 @@ colcon test --packages-select etrobo_object_detection
    
    # View detection results
    ros2 run rqt_image_view rqt_image_view /object_detection/image/compressed
+   
+   # View detection data
+   ros2 topic echo /object_detection/detections
    ```
 
 ## Performance Optimization

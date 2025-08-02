@@ -5,14 +5,14 @@
 #include <memory>
 #include <opencv2/opencv.hpp>
 #include <rclcpp/rclcpp.hpp>
-#include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
-#include <vision_msgs/msg/detection2_d_array.hpp>
-#include <vision_msgs/msg/detection2_d.hpp>
-#include <vision_msgs/msg/bounding_box2_d.hpp>
-#include <vision_msgs/msg/object_hypothesis_with_pose.hpp>
+#include <sensor_msgs/msg/image.hpp>
 #include <sstream>
 #include <vector>
+#include <vision_msgs/msg/bounding_box2_d.hpp>
+#include <vision_msgs/msg/detection2_d.hpp>
+#include <vision_msgs/msg/detection2_d_array.hpp>
+#include <vision_msgs/msg/object_hypothesis_with_pose.hpp>
 
 #include <ncnn/layer.h>
 #include <ncnn/net.h>
@@ -96,7 +96,8 @@ private:
     num_threads_ = this->get_parameter("num_threads").as_int();
     input_topic_ = this->get_parameter("input_topic").as_string();
     use_vulkan_ = this->get_parameter("use_vulkan").as_bool();
-    this->declare_parameter("output_topic", "/object_detection/image/compressed");
+    this->declare_parameter("output_topic",
+                            "/object_detection/image/compressed");
     output_topic_ = this->get_parameter("output_topic").as_string();
 
     RCLCPP_INFO(this->get_logger(), "Parameters:");
@@ -109,7 +110,8 @@ private:
     RCLCPP_INFO(this->get_logger(), "  input_topic: %s", input_topic_.c_str());
     RCLCPP_INFO(this->get_logger(), "  use_vulkan: %s",
                 use_vulkan_ ? "true" : "false");
-    RCLCPP_INFO(this->get_logger(), "  output_topic: %s", output_topic_.c_str());
+    RCLCPP_INFO(this->get_logger(), "  output_topic: %s",
+                output_topic_.c_str());
   }
 
   void setup_subscription() {
@@ -126,11 +128,13 @@ private:
     auto qos = rclcpp::QoS(rclcpp::KeepLast(10));
     qos.best_effort();
 
-    image_publisher_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
-        output_topic_, qos);
-    
-    detection_publisher_ = this->create_publisher<vision_msgs::msg::Detection2DArray>(
-        "/object_detection/detections", qos);
+    image_publisher_ =
+        this->create_publisher<sensor_msgs::msg::CompressedImage>(output_topic_,
+                                                                  qos);
+
+    detection_publisher_ =
+        this->create_publisher<vision_msgs::msg::Detection2DArray>(
+            "/object_detection/detections", qos);
   }
 
   void initialize_ncnn_network() {
@@ -495,11 +499,13 @@ private:
       // Store input timestamp and frame_id for detection results
       input_timestamp_ = msg->header.stamp;
       input_frame_id_ = msg->header.frame_id;
-      
+
       // Debug: Log input timestamp and frame_id
-      RCLCPP_DEBUG(this->get_logger(), "Input timestamp: %.0f.%09ld, frame_id: '%s'", 
-                   input_timestamp_.seconds(), input_timestamp_.nanoseconds(), input_frame_id_.c_str());
-      
+      RCLCPP_DEBUG(this->get_logger(),
+                   "Input timestamp: %.0f.%09ld, frame_id: '%s'",
+                   input_timestamp_.seconds(), input_timestamp_.nanoseconds(),
+                   input_frame_id_.c_str());
+
       cv_bridge::CvImagePtr cv_ptr =
           cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
       cv::Mat img = cv_ptr->image;
@@ -588,21 +594,26 @@ private:
       image_publisher_->publish(std::move(msg));
 
     } catch (const std::exception &e) {
-      RCLCPP_WARN(this->get_logger(), "Failed to publish result image: %s", e.what());
+      RCLCPP_WARN(this->get_logger(), "Failed to publish result image: %s",
+                  e.what());
     }
   }
 
-  void publish_detections(const std::vector<Object> &objects, const rclcpp::Time &timestamp, const std::string &frame_id) {
+  void publish_detections(const std::vector<Object> &objects,
+                          const rclcpp::Time &timestamp,
+                          const std::string &frame_id) {
     try {
       // Create Detection2DArray message
-      auto detection_msg = std::make_unique<vision_msgs::msg::Detection2DArray>();
+      auto detection_msg =
+          std::make_unique<vision_msgs::msg::Detection2DArray>();
       detection_msg->header.stamp = timestamp;
-      detection_msg->header.frame_id = frame_id.empty() ? "camera_frame" : frame_id;
+      detection_msg->header.frame_id =
+          frame_id.empty() ? "camera_frame" : frame_id;
 
       // Add detections (even if empty)
       for (const auto &obj : objects) {
         vision_msgs::msg::Detection2D detection;
-        
+
         // Set bounding box
         detection.bbox.center.position.x = obj.rect.x + obj.rect.width / 2.0;
         detection.bbox.center.position.y = obj.rect.y + obj.rect.height / 2.0;
@@ -623,13 +634,16 @@ private:
       detection_publisher_->publish(std::move(detection_msg));
 
     } catch (const std::exception &e) {
-      RCLCPP_WARN(this->get_logger(), "Failed to publish detections: %s", e.what());
+      RCLCPP_WARN(this->get_logger(), "Failed to publish detections: %s",
+                  e.what());
     }
   }
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subscription_;
-  rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr image_publisher_;
-  rclcpp::Publisher<vision_msgs::msg::Detection2DArray>::SharedPtr detection_publisher_;
+  rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr
+      image_publisher_;
+  rclcpp::Publisher<vision_msgs::msg::Detection2DArray>::SharedPtr
+      detection_publisher_;
 
   std::string param_path_;
   std::string bin_path_;
@@ -642,7 +656,7 @@ private:
 
   std::unique_ptr<ncnn::Net> net_;
   std::vector<std::string> coco_labels_;
-  
+
   // Input timestamp and frame_id for detection results
   rclcpp::Time input_timestamp_;
   std::string input_frame_id_;

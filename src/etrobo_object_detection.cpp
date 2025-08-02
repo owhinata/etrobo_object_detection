@@ -15,7 +15,8 @@ public:
         return;
       }
 
-      // Set backend and target; disable layer fusion to avoid dynamic-ONNX shape issues
+      // Set backend and target; disable layer fusion to avoid dynamic-ONNX
+      // shape issues
       net_.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
       net_.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
       net_.enableFusion(false);
@@ -100,14 +101,16 @@ private:
     std::vector<cv::Mat> outputs;
     // Forward inference using output layer names
     std::vector<cv::String> output_names = net_.getUnconnectedOutLayersNames();
-    RCLCPP_INFO(this->get_logger(), "Using %zu output layer names for forward", output_names.size());
+    RCLCPP_INFO(this->get_logger(), "Using %zu output layer names for forward",
+                output_names.size());
     for (size_t idx = 0; idx < output_names.size(); ++idx) {
-      RCLCPP_INFO(this->get_logger(), "Output name[%zu]: %s", idx, output_names[idx].c_str());
+      RCLCPP_INFO(this->get_logger(), "Output name[%zu]: %s", idx,
+                  output_names[idx].c_str());
     }
     try {
       net_.forward(outputs, output_names);
       RCLCPP_INFO(this->get_logger(), "Forward completed successfully");
-    } catch (const cv::Exception& e) {
+    } catch (const cv::Exception &e) {
       RCLCPP_ERROR(this->get_logger(), "OpenCV DNN error: %s", e.what());
       return result;
     }
