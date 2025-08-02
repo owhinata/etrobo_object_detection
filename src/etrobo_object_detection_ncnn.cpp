@@ -593,16 +593,20 @@ private:
     auto preprocess_end = std::chrono::steady_clock::now();
     auto inference_start = std::chrono::steady_clock::now();
 
-    // For drawing: get all objects (no class filtering)
+    // Single detection run without class filtering to get all objects
     std::vector<Object> all_objects;
     detect_yolov8(image, all_objects, false); // apply_class_filter = false
 
-    // For Detection2DArray: get filtered objects only
-    std::vector<Object> filtered_objects;
-    detect_yolov8(image, filtered_objects, true); // apply_class_filter = true
-
     auto inference_end = std::chrono::steady_clock::now();
     auto postprocess_start = std::chrono::steady_clock::now();
+
+    // Filter objects for Detection2DArray output
+    std::vector<Object> filtered_objects;
+    for (const auto &obj : all_objects) {
+      if (target_classes_.empty() || target_classes_.count(obj.label) > 0) {
+        filtered_objects.push_back(obj);
+      }
+    }
 
     DetectionResults detection_results =
         process_detection_results(filtered_objects);
