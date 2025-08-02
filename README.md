@@ -234,13 +234,20 @@ Create a parameter file `config_onnx.yaml`:
 ```yaml
 etrobo_object_detection:
   ros__parameters:
+    # Model parameters
     model_path: "/path/to/yolov8n.onnx"
+    
+    # Inference parameters
     confidence_threshold: 0.5
     nms_threshold: 0.4
+    target_classes: [39]  # Bottle only (default)
+    
+    # Runtime parameters
     num_threads: 2
+    
+    # I/O parameters
     input_topic: "/image_raw"
     output_topic: "/object_detection"
-    target_classes: [39]  # Bottle only (default)
 ```
 
 #### NCNN Parameter File
@@ -248,16 +255,23 @@ Create a parameter file `config_ncnn.yaml`:
 ```yaml
 object_detection_ncnn:
   ros__parameters:
+    # Model parameters
     param_path: "/path/to/yolov8n.ncnn.param"
     bin_path: "/path/to/yolov8n.ncnn.bin"
+    input_size: 320
+    
+    # Inference parameters
     confidence_threshold: 0.5
     nms_threshold: 0.4
+    target_classes: [39]  # Bottle only (default)
+    
+    # Runtime parameters
     num_threads: 2
+    use_vulkan: true
+    
+    # I/O parameters
     input_topic: "/image_raw"
     output_topic: "/object_detection"
-    use_vulkan: true
-    input_size: 320
-    target_classes: [39]  # Bottle only (default)
 ```
 
 Run with parameter file:
@@ -300,16 +314,24 @@ def generate_launch_description():
 
 ### ONNX Runtime Backend Parameters
 
-#### High Priority Parameters
+#### Model Parameters
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `model_path` | string | `"yolov8n.onnx"` | Path to YOLOv8 ONNX model file |
+
+#### Inference Parameters
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
 | `confidence_threshold` | double | `0.5` | Minimum confidence score for detections |
 | `nms_threshold` | double | `0.4` | Non-Maximum Suppression threshold |
-| `num_threads` | int | `2` | Number of threads for ONNX Runtime inference |
 | `target_classes` | int[] | `[39]` | COCO class IDs to detect (39=bottle). Empty array `[]` = detect all classes |
 
-#### Medium Priority Parameters  
+#### Runtime Parameters
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `num_threads` | int | `2` | Number of threads for ONNX Runtime inference |
+
+#### I/O Parameters  
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `input_topic` | string | `"/image_raw"` | Input image topic name |
@@ -317,23 +339,31 @@ def generate_launch_description():
 
 ### NCNN Backend Parameters
 
-#### High Priority Parameters
+#### Model Parameters
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `param_path` | string | `"yolov8n.ncnn.param"` | Path to NCNN parameter file |
 | `bin_path` | string | `"yolov8n.ncnn.bin"` | Path to NCNN binary file |
+| `input_size` | int | `320` | Input tensor size (width and height) |
+
+#### Inference Parameters
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
 | `confidence_threshold` | double | `0.5` | Minimum confidence score for detections |
 | `nms_threshold` | double | `0.4` | Non-Maximum Suppression threshold |
-| `num_threads` | int | `2` | Number of threads for NCNN inference |
-| `input_size` | int | `320` | Input tensor size (width and height) |
 | `target_classes` | int[] | `[39]` | COCO class IDs to detect (39=bottle). Empty array `[]` = detect all classes |
 
-#### Medium Priority Parameters  
+#### Runtime Parameters
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `num_threads` | int | `2` | Number of threads for NCNN inference |
+| `use_vulkan` | bool | `true` | Enable Vulkan GPU acceleration |
+
+#### I/O Parameters  
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `input_topic` | string | `"/image_raw"` | Input image topic name |
 | `output_topic` | string | `"/object_detection"` | Output topic base name (generates `/detections` and `/image/compressed`) |
-| `use_vulkan` | bool | `true` | Enable Vulkan GPU acceleration |
 
 **Note**: 
 - **Input Size Handling**: 

@@ -80,38 +80,53 @@ private:
   }
 
   void declare_parameters() {
-    // High priority parameters
+    // Model parameters
     this->declare_parameter("model_path", "yolov8n.onnx");
+    
+    // Inference parameters
     this->declare_parameter("confidence_threshold", 0.5);
     this->declare_parameter("nms_threshold", 0.4);
-    this->declare_parameter("num_threads", 2);
-
-    // Medium priority parameters
-    this->declare_parameter("input_topic", "/image_raw");
-
-    // Get parameter values
-    model_path_ = this->get_parameter("model_path").as_string();
-    confidence_threshold_ =
-        this->get_parameter("confidence_threshold").as_double();
-    nms_threshold_ = this->get_parameter("nms_threshold").as_double();
-    num_threads_ = this->get_parameter("num_threads").as_int();
-    input_topic_ = this->get_parameter("input_topic").as_string();
-    this->declare_parameter("output_topic", "/object_detection");
-    output_topic_ = this->get_parameter("output_topic").as_string();
     this->declare_parameter("target_classes", std::vector<int64_t>{39});  // bottle only
+    
+    // Runtime parameters
+    this->declare_parameter("num_threads", 2);
+    
+    // I/O parameters
+    this->declare_parameter("input_topic", "/image_raw");
+    this->declare_parameter("output_topic", "/object_detection");
+
+    // Get model parameters
+    model_path_ = this->get_parameter("model_path").as_string();
+    
+    // Get inference parameters
+    confidence_threshold_ = this->get_parameter("confidence_threshold").as_double();
+    nms_threshold_ = this->get_parameter("nms_threshold").as_double();
     auto target_classes_param = this->get_parameter("target_classes").as_integer_array();
     target_classes_.clear();
     for (auto class_id : target_classes_param) {
       target_classes_.insert(static_cast<int>(class_id));
     }
+    
+    // Get runtime parameters
+    num_threads_ = this->get_parameter("num_threads").as_int();
+    
+    // Get I/O parameters
+    input_topic_ = this->get_parameter("input_topic").as_string();
+    output_topic_ = this->get_parameter("output_topic").as_string();
 
     // Log parameter values
     RCLCPP_INFO(this->get_logger(), "Parameters:");
+    // Model parameters
     RCLCPP_INFO(this->get_logger(), "  model_path: %s", model_path_.c_str());
-    RCLCPP_INFO(this->get_logger(), "  confidence_threshold: %.2f",
-                confidence_threshold_);
+    
+    // Inference parameters
+    RCLCPP_INFO(this->get_logger(), "  confidence_threshold: %.2f", confidence_threshold_);
     RCLCPP_INFO(this->get_logger(), "  nms_threshold: %.2f", nms_threshold_);
+    
+    // Runtime parameters
     RCLCPP_INFO(this->get_logger(), "  num_threads: %d", num_threads_);
+    
+    // I/O parameters
     RCLCPP_INFO(this->get_logger(), "  input_topic: %s", input_topic_.c_str());
     RCLCPP_INFO(this->get_logger(), "  output_topic: %s", output_topic_.c_str());
     
@@ -668,14 +683,21 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr image_publisher_;
   rclcpp::Publisher<vision_msgs::msg::Detection2DArray>::SharedPtr detection_publisher_;
 
-  // ROS2 parameters
+  // Model parameters
   std::string model_path_;
+  int input_size_; // Auto-detected from model
+  
+  // Inference parameters
   double confidence_threshold_;
   double nms_threshold_;
+  std::set<int> target_classes_;
+  
+  // Runtime parameters
   int num_threads_;
+  
+  // I/O parameters
   std::string input_topic_;
   std::string output_topic_;
-  int input_size_; // Auto-detected from model
 
   // ONNX Runtime components
   std::unique_ptr<Ort::Env> env_;
@@ -695,9 +717,6 @@ private:
   // Input timestamp and frame_id for detection results
   rclcpp::Time input_timestamp_;
   std::string input_frame_id_;
-  
-  // Target class IDs for filtering
-  std::set<int> target_classes_;
 };
 
 int main(int argc, char *argv[]) {
