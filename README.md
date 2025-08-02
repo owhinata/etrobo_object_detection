@@ -239,7 +239,7 @@ etrobo_object_detection:
     nms_threshold: 0.4
     num_threads: 2
     input_topic: "/image_raw"
-    output_topic: "/object_detection/image/compressed"
+    output_topic: "/object_detection"
     target_classes: [39]  # Bottle only (default)
 ```
 
@@ -254,7 +254,7 @@ object_detection_ncnn:
     nms_threshold: 0.4
     num_threads: 2
     input_topic: "/image_raw"
-    output_topic: "/object_detection/image/compressed"
+    output_topic: "/object_detection"
     use_vulkan: true
     target_classes: [39]  # Bottle only (default)
 ```
@@ -288,7 +288,7 @@ def generate_launch_description():
                 'nms_threshold': 0.4,
                 'num_threads': 2,
                 'input_topic': '/camera/image_raw',
-                'output_topic': '/object_detection/image/compressed',
+                'output_topic': '/object_detection',
                 'target_classes': [39]  # Bottle only
             }]
         )
@@ -312,7 +312,7 @@ def generate_launch_description():
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `input_topic` | string | `"/image_raw"` | Input image topic name |
-| `output_topic` | string | `"/object_detection/image/compressed"` | Output compressed image topic name |
+| `output_topic` | string | `"/object_detection"` | Output topic base name (generates `/detections` and `/image/compressed`) |
 
 ### NCNN Backend Parameters
 
@@ -330,7 +330,7 @@ def generate_launch_description():
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `input_topic` | string | `"/image_raw"` | Input image topic name |
-| `output_topic` | string | `"/object_detection/image/compressed"` | Output compressed image topic name |
+| `output_topic` | string | `"/object_detection"` | Output topic base name (generates `/detections` and `/image/compressed`) |
 | `use_vulkan` | bool | `true` | Enable Vulkan GPU acceleration |
 
 **Note**: 
@@ -345,8 +345,8 @@ def generate_launch_description():
 - `{input_topic}` (`sensor_msgs/Image`): Input camera images
 
 ### Published Topics
-- `{output_topic}` (`sensor_msgs/CompressedImage`): Detection result images with bounding boxes (JPEG compressed)
-- `/object_detection/detections` (`vision_msgs/Detection2DArray`): Object detection results with bounding boxes, class IDs, and confidence scores (filtered by `target_classes`)
+- `{output_topic}/image/compressed` (`sensor_msgs/CompressedImage`): Detection result images with bounding boxes (JPEG compressed)
+- `{output_topic}/detections` (`vision_msgs/Detection2DArray`): Object detection results with bounding boxes, class IDs, and confidence scores (filtered by `target_classes`)
 
 ## Class Filtering
 
@@ -409,7 +409,7 @@ etrobo_object_detection:
 
 ### Detection Results Format
 
-The `/object_detection/detections` topic publishes detection results in the standard `vision_msgs/Detection2DArray` format, which includes:
+The `{output_topic}/detections` topic publishes detection results in the standard `vision_msgs/Detection2DArray` format, which includes:
 
 #### Message Structure
 ```yaml
@@ -447,7 +447,7 @@ The detection results use COCO dataset class IDs (0-79):
 
 #### Subscribe to Detection Results
 ```bash
-# View all detection messages
+# View all detection messages (default output_topic)
 ros2 topic echo /object_detection/detections
 
 # View detection headers only
@@ -468,7 +468,7 @@ class DetectionSubscriber(Node):
         super().__init__('detection_subscriber')
         self.subscription = self.create_subscription(
             Detection2DArray,
-            '/object_detection/detections',
+            '/object_detection/detections',  # Use your configured output_topic + '/detections'
             self.detection_callback,
             10)
 

@@ -98,7 +98,7 @@ private:
     input_topic_ = this->get_parameter("input_topic").as_string();
     use_vulkan_ = this->get_parameter("use_vulkan").as_bool();
     this->declare_parameter("output_topic",
-                            "/object_detection/image/compressed");
+                            "/object_detection");
     output_topic_ = this->get_parameter("output_topic").as_string();
     this->declare_parameter("target_classes",
                             std::vector<int64_t>{39}); // bottle only
@@ -150,12 +150,12 @@ private:
     qos.best_effort();
 
     image_publisher_ =
-        this->create_publisher<sensor_msgs::msg::CompressedImage>(output_topic_,
+        this->create_publisher<sensor_msgs::msg::CompressedImage>(output_topic_ + "/image/compressed",
                                                                   qos);
 
     detection_publisher_ =
         this->create_publisher<vision_msgs::msg::Detection2DArray>(
-            "/object_detection/detections", qos);
+            output_topic_ + "/detections", qos);
   }
 
   void initialize_ncnn_network() {

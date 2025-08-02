@@ -96,7 +96,7 @@ private:
     nms_threshold_ = this->get_parameter("nms_threshold").as_double();
     num_threads_ = this->get_parameter("num_threads").as_int();
     input_topic_ = this->get_parameter("input_topic").as_string();
-    this->declare_parameter("output_topic", "/object_detection/image/compressed");
+    this->declare_parameter("output_topic", "/object_detection");
     output_topic_ = this->get_parameter("output_topic").as_string();
     this->declare_parameter("target_classes", std::vector<int64_t>{39});  // bottle only
     auto target_classes_param = this->get_parameter("target_classes").as_integer_array();
@@ -141,10 +141,10 @@ private:
     qos.best_effort();
 
     image_publisher_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
-        output_topic_, qos);
+        output_topic_ + "/image/compressed", qos);
     
     detection_publisher_ = this->create_publisher<vision_msgs::msg::Detection2DArray>(
-        "/object_detection/detections", qos);
+        output_topic_ + "/detections", qos);
   }
 
   void initialize_onnx_runtime() {
