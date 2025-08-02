@@ -88,6 +88,7 @@ private:
     this->declare_parameter("num_threads", 1);
     this->declare_parameter("input_topic", "/image_raw");
     this->declare_parameter("use_vulkan", true);
+    this->declare_parameter("input_size", 320);
 
     param_path_ = this->get_parameter("param_path").as_string();
     bin_path_ = this->get_parameter("bin_path").as_string();
@@ -97,6 +98,7 @@ private:
     num_threads_ = this->get_parameter("num_threads").as_int();
     input_topic_ = this->get_parameter("input_topic").as_string();
     use_vulkan_ = this->get_parameter("use_vulkan").as_bool();
+    input_size_ = this->get_parameter("input_size").as_int();
     this->declare_parameter("output_topic",
                             "/object_detection");
     output_topic_ = this->get_parameter("output_topic").as_string();
@@ -119,6 +121,7 @@ private:
     RCLCPP_INFO(this->get_logger(), "  input_topic: %s", input_topic_.c_str());
     RCLCPP_INFO(this->get_logger(), "  use_vulkan: %s",
                 use_vulkan_ ? "true" : "false");
+    RCLCPP_INFO(this->get_logger(), "  input_size: %d", input_size_);
     RCLCPP_INFO(this->get_logger(), "  output_topic: %s",
                 output_topic_.c_str());
 
@@ -370,7 +373,7 @@ private:
 
   int detect_yolov8(const cv::Mat &bgr, std::vector<Object> &objects,
                     bool apply_class_filter = true) {
-    const int target_size = 320;
+    const int target_size = input_size_;
     const float prob_threshold = confidence_threshold_;
     const float nms_threshold = nms_threshold_;
 
@@ -519,8 +522,8 @@ private:
 
     RCLCPP_INFO(this->get_logger(),
                 "Speed: %.1fms preprocess, %.1fms inference, %.1fms "
-                "postprocess per image at shape (1, 3, 320, 320)",
-                preprocess_ms, inference_ms, postprocess_ms);
+                "postprocess per image at shape (1, 3, %d, %d)",
+                preprocess_ms, inference_ms, postprocess_ms, input_size_, input_size_);
   }
 
   void image_callback(const sensor_msgs::msg::Image::SharedPtr msg) {
@@ -688,6 +691,7 @@ private:
   std::string input_topic_;
   std::string output_topic_;
   bool use_vulkan_;
+  int input_size_;
 
   std::unique_ptr<ncnn::Net> net_;
   std::vector<std::string> coco_labels_;

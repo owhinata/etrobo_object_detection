@@ -256,6 +256,7 @@ object_detection_ncnn:
     input_topic: "/image_raw"
     output_topic: "/object_detection"
     use_vulkan: true
+    input_size: 320
     target_classes: [39]  # Bottle only (default)
 ```
 
@@ -324,6 +325,7 @@ def generate_launch_description():
 | `confidence_threshold` | double | `0.5` | Minimum confidence score for detections |
 | `nms_threshold` | double | `0.4` | Non-Maximum Suppression threshold |
 | `num_threads` | int | `2` | Number of threads for NCNN inference |
+| `input_size` | int | `320` | Input tensor size (width and height) |
 | `target_classes` | int[] | `[39]` | COCO class IDs to detect (39=bottle). Empty array `[]` = detect all classes |
 
 #### Medium Priority Parameters  
@@ -334,7 +336,9 @@ def generate_launch_description():
 | `use_vulkan` | bool | `true` | Enable Vulkan GPU acceleration |
 
 **Note**: 
-- Input size is automatically handled by the respective inference engines.
+- **Input Size Handling**: 
+  - ONNX version: Automatically detected from model metadata
+  - NCNN version: Configured via `input_size` parameter
 - Output images are published only when there are subscribers to the output topic.
 - Images are compressed to JPEG format (quality 80%) to reduce bandwidth usage.
 - **Class Filtering**: `target_classes` parameter filters Detection2DArray results but debug images always show all detected objects.
