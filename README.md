@@ -222,8 +222,7 @@ ros2 run etrobo_object_detection etrobo_object_detection_ncnn
 ros2 run etrobo_object_detection etrobo_object_detection_ncnn \
   --ros-args \
   -p model_path:=/path/to/yolov8n.ncnn.bin \
-  -p confidence_threshold:=0.3 \
-  -p use_vulkan:=true
+  -p confidence_threshold:=0.3
 ```
 
 ### Using Parameter File
@@ -265,7 +264,6 @@ object_detection_ncnn:
     
     # Runtime parameters
     num_threads: 2
-    use_vulkan: true
     
     # I/O parameters
     input_topic: "/image_raw"
@@ -354,7 +352,6 @@ def generate_launch_description():
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `num_threads` | int | `2` | Number of threads for NCNN inference |
-| `use_vulkan` | bool | `true` | Enable Vulkan GPU acceleration |
 
 #### I/O Parameters  
 | Parameter | Type | Default | Description |

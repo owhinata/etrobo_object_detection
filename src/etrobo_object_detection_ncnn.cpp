@@ -93,7 +93,6 @@ private:
 
     // Runtime parameters
     this->declare_parameter("num_threads", 1);
-    this->declare_parameter("use_vulkan", true);
 
     // I/O parameters
     this->declare_parameter("input_topic", "/image_raw");
@@ -125,7 +124,6 @@ private:
 
     // Get runtime parameters
     num_threads_ = this->get_parameter("num_threads").as_int();
-    use_vulkan_ = this->get_parameter("use_vulkan").as_bool();
 
     // Get I/O parameters
     input_topic_ = this->get_parameter("input_topic").as_string();
@@ -143,8 +141,6 @@ private:
 
     // Runtime parameters
     RCLCPP_INFO(this->get_logger(), "  num_threads: %d", num_threads_);
-    RCLCPP_INFO(this->get_logger(), "  use_vulkan: %s",
-                use_vulkan_ ? "true" : "false");
 
     // I/O parameters
     RCLCPP_INFO(this->get_logger(), "  input_topic: %s", input_topic_.c_str());
@@ -190,7 +186,7 @@ private:
   void initialize_ncnn_network() {
     net_ = std::make_unique<ncnn::Net>();
 
-    net_->opt.use_vulkan_compute = use_vulkan_;
+    net_->opt.use_vulkan_compute = true;
     net_->opt.num_threads = num_threads_;
 
     int ret = net_->load_param(param_path_.c_str());
@@ -210,8 +206,6 @@ private:
     RCLCPP_INFO(this->get_logger(), "=== MODEL INFO ===");
     RCLCPP_INFO(this->get_logger(), "Param file: %s", param_path_.c_str());
     RCLCPP_INFO(this->get_logger(), "Model file: %s", model_path_.c_str());
-    RCLCPP_INFO(this->get_logger(), "Vulkan enabled: %s",
-                use_vulkan_ ? "true" : "false");
     RCLCPP_INFO(this->get_logger(), "Threads: %d", num_threads_);
     RCLCPP_INFO(this->get_logger(), "==================");
   }
@@ -722,7 +716,6 @@ private:
 
   // Runtime parameters
   int num_threads_;
-  bool use_vulkan_;
 
   // I/O parameters
   std::string input_topic_;
