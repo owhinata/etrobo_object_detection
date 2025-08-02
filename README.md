@@ -238,7 +238,7 @@ etrobo_object_detection:
     # Inference parameters
     confidence_threshold: 0.5
     nms_threshold: 0.4
-    target_classes: [39]  # Bottle only (default)
+    target_classes: []  # All objects (default)
     
     # Runtime parameters
     num_threads: 2
@@ -260,7 +260,7 @@ object_detection_ncnn:
     # Inference parameters
     confidence_threshold: 0.5
     nms_threshold: 0.4
-    target_classes: [39]  # Bottle only (default)
+    target_classes: []  # All objects (default)
     
     # Runtime parameters
     num_threads: 2
@@ -300,7 +300,7 @@ def generate_launch_description():
                 'num_threads': 2,
                 'input_topic': '/camera/image_raw',
                 'output_topic': '/object_detection',
-                'target_classes': [39]  # Bottle only
+                'target_classes': []  # All objects (default)
             }]
         )
     ])
@@ -320,7 +320,7 @@ def generate_launch_description():
 |-----------|------|---------|-------------|
 | `confidence_threshold` | double | `0.5` | Minimum confidence score for detections |
 | `nms_threshold` | double | `0.4` | Non-Maximum Suppression threshold |
-| `target_classes` | int[] | `[39]` | COCO class IDs to detect (39=bottle). Empty array `[]` = detect all classes |
+| `target_classes` | int[] | `[]` | COCO class IDs to detect. Empty array `[]` = detect all classes (default) |
 
 #### Runtime Parameters
 | Parameter | Type | Default | Description |
@@ -346,7 +346,7 @@ def generate_launch_description():
 |-----------|------|---------|-------------|
 | `confidence_threshold` | double | `0.5` | Minimum confidence score for detections |
 | `nms_threshold` | double | `0.4` | Non-Maximum Suppression threshold |
-| `target_classes` | int[] | `[39]` | COCO class IDs to detect (39=bottle). Empty array `[]` = detect all classes |
+| `target_classes` | int[] | `[]` | COCO class IDs to detect. Empty array `[]` = detect all classes (default) |
 
 #### Runtime Parameters
 | Parameter | Type | Default | Description |
@@ -388,17 +388,17 @@ The package supports filtering detected objects by class ID through the `target_
 
 ### Configuration Examples
 
-#### Default (Bottle Only)
+#### Default (All Objects)
 ```bash
-# Default behavior - detects only bottles (class ID 39)
+# Default behavior - detects all objects
 ros2 run etrobo_object_detection etrobo_object_detection
 ```
 
-#### Detect All Objects
+#### Detect Specific Objects (Bottles Only)
 ```bash
-# Set empty array to disable filtering
+# Set specific class IDs to enable filtering
 ros2 run etrobo_object_detection etrobo_object_detection \
-  --ros-args -p target_classes:=[]
+  --ros-args -p target_classes:="[39]"
 ```
 
 #### Multiple Object Types
@@ -416,8 +416,8 @@ ros2 run etrobo_object_detection etrobo_object_detection \
 ```yaml
 etrobo_object_detection:
   ros__parameters:
-    target_classes: [39]        # Bottle only
-    # target_classes: []        # All objects  
+    target_classes: []          # All objects (default)
+    # target_classes: [39]      # Bottle only
     # target_classes: [0, 39]   # Person and bottle
     # target_classes: [2, 3, 5, 7]  # Vehicles
 ```
@@ -431,8 +431,8 @@ etrobo_object_detection:
 ### Behavior Summary
 | Scenario | Detection2DArray | Debug Images | Console Logging |
 |----------|------------------|--------------|-----------------|
-| `target_classes: [39]` | Bottles only | All objects | Bottles only |
 | `target_classes: []` | All objects | All objects | All objects |
+| `target_classes: [39]` | Bottles only | All objects | Bottles only |
 | `target_classes: [0, 39]` | Persons & bottles | All objects | Persons & bottles |
 
 ### Detection Results Format

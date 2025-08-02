@@ -89,7 +89,7 @@ private:
     this->declare_parameter("confidence_threshold", 0.25);
     this->declare_parameter("nms_threshold", 0.4);
     this->declare_parameter("target_classes",
-                            std::vector<int64_t>{39}); // bottle only
+                            std::vector<int64_t>{}); // all objects
 
     // Runtime parameters
     this->declare_parameter("num_threads", 1);
