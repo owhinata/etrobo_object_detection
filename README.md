@@ -240,6 +240,7 @@ etrobo_object_detection:
     num_threads: 2
     input_topic: "/image_raw"
     output_topic: "/object_detection/image/compressed"
+    target_classes: [39]  # Bottle only (default)
 ```
 
 #### NCNN Parameter File
@@ -255,6 +256,7 @@ object_detection_ncnn:
     input_topic: "/image_raw"
     output_topic: "/object_detection/image/compressed"
     use_vulkan: true
+    target_classes: [39]  # Bottle only (default)
 ```
 
 Run with parameter file:
@@ -286,7 +288,8 @@ def generate_launch_description():
                 'nms_threshold': 0.4,
                 'num_threads': 2,
                 'input_topic': '/camera/image_raw',
-                'output_topic': '/object_detection/image/compressed'
+                'output_topic': '/object_detection/image/compressed',
+                'target_classes': [39]  # Bottle only
             }]
         )
     ])
@@ -303,6 +306,7 @@ def generate_launch_description():
 | `confidence_threshold` | double | `0.5` | Minimum confidence score for detections |
 | `nms_threshold` | double | `0.4` | Non-Maximum Suppression threshold |
 | `num_threads` | int | `2` | Number of threads for ONNX Runtime inference |
+| `target_classes` | int[] | `[39]` | COCO class IDs to detect (39=bottle). Empty array `[]` = detect all classes |
 
 #### Medium Priority Parameters  
 | Parameter | Type | Default | Description |
@@ -320,6 +324,7 @@ def generate_launch_description():
 | `confidence_threshold` | double | `0.5` | Minimum confidence score for detections |
 | `nms_threshold` | double | `0.4` | Non-Maximum Suppression threshold |
 | `num_threads` | int | `2` | Number of threads for NCNN inference |
+| `target_classes` | int[] | `[39]` | COCO class IDs to detect (39=bottle). Empty array `[]` = detect all classes |
 
 #### Medium Priority Parameters  
 | Parameter | Type | Default | Description |
@@ -332,6 +337,7 @@ def generate_launch_description():
 - Input size is automatically handled by the respective inference engines.
 - Output images are published only when there are subscribers to the output topic.
 - Images are compressed to JPEG format (quality 80%) to reduce bandwidth usage.
+- **Class Filtering**: `target_classes` parameter filters Detection2DArray results but debug images always show all detected objects.
 
 ## Topics
 
@@ -340,7 +346,66 @@ def generate_launch_description():
 
 ### Published Topics
 - `{output_topic}` (`sensor_msgs/CompressedImage`): Detection result images with bounding boxes (JPEG compressed)
-- `/object_detection/detections` (`vision_msgs/Detection2DArray`): Object detection results with bounding boxes, class IDs, and confidence scores
+- `/object_detection/detections` (`vision_msgs/Detection2DArray`): Object detection results with bounding boxes, class IDs, and confidence scores (filtered by `target_classes`)
+
+## Class Filtering
+
+The package supports filtering detected objects by class ID through the `target_classes` parameter. This feature allows you to focus on specific types of objects while reducing unnecessary data.
+
+### How It Works
+
+- **Detection2DArray Topic**: Only publishes objects matching the specified class IDs
+- **Debug Images**: Always show all detected objects regardless of filtering (for debugging purposes)
+- **Statistics Logging**: Reports only filtered objects in console output
+
+### Configuration Examples
+
+#### Default (Bottle Only)
+```bash
+# Default behavior - detects only bottles (class ID 39)
+ros2 run etrobo_object_detection etrobo_object_detection
+```
+
+#### Detect All Objects
+```bash
+# Set empty array to disable filtering
+ros2 run etrobo_object_detection etrobo_object_detection \
+  --ros-args -p target_classes:=[]
+```
+
+#### Multiple Object Types
+```bash
+# Detect persons and bottles
+ros2 run etrobo_object_detection etrobo_object_detection \
+  --ros-args -p target_classes:="[0, 39]"
+
+# Detect vehicles (car, motorcycle, bus, truck)
+ros2 run etrobo_object_detection etrobo_object_detection \
+  --ros-args -p target_classes:="[2, 3, 5, 7]"
+```
+
+#### Parameter File Configuration
+```yaml
+etrobo_object_detection:
+  ros__parameters:
+    target_classes: [39]        # Bottle only
+    # target_classes: []        # All objects  
+    # target_classes: [0, 39]   # Person and bottle
+    # target_classes: [2, 3, 5, 7]  # Vehicles
+```
+
+### Common COCO Class IDs
+- `0`: person, `2`: car, `3`: motorcycle, `5`: bus, `7`: truck
+- `9`: traffic light, `11`: stop sign, `39`: bottle, `41`: cup
+- `56`: chair, `57`: couch, `59`: bed, `60`: dining table
+- See [full COCO class list](https://github.com/ultralytics/ultralytics/blob/main/ultralytics/cfg/datasets/coco.yaml)
+
+### Behavior Summary
+| Scenario | Detection2DArray | Debug Images | Console Logging |
+|----------|------------------|--------------|-----------------|
+| `target_classes: [39]` | Bottles only | All objects | Bottles only |
+| `target_classes: []` | All objects | All objects | All objects |
+| `target_classes: [0, 39]` | Persons & bottles | All objects | Persons & bottles |
 
 ### Detection Results Format
 

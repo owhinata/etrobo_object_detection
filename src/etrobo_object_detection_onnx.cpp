@@ -12,6 +12,7 @@
 #include <vision_msgs/msg/detection2_d.hpp>
 #include <vision_msgs/msg/bounding_box2_d.hpp>
 #include <vision_msgs/msg/object_hypothesis_with_pose.hpp>
+#include <set>
 #include <sstream>
 #include <vector>
 
@@ -97,6 +98,12 @@ private:
     input_topic_ = this->get_parameter("input_topic").as_string();
     this->declare_parameter("output_topic", "/object_detection/image/compressed");
     output_topic_ = this->get_parameter("output_topic").as_string();
+    this->declare_parameter("target_classes", std::vector<int64_t>{39});  // bottle only
+    auto target_classes_param = this->get_parameter("target_classes").as_integer_array();
+    target_classes_.clear();
+    for (auto class_id : target_classes_param) {
+      target_classes_.insert(static_cast<int>(class_id));
+    }
 
     // Log parameter values
     RCLCPP_INFO(this->get_logger(), "Parameters:");
@@ -107,6 +114,16 @@ private:
     RCLCPP_INFO(this->get_logger(), "  num_threads: %d", num_threads_);
     RCLCPP_INFO(this->get_logger(), "  input_topic: %s", input_topic_.c_str());
     RCLCPP_INFO(this->get_logger(), "  output_topic: %s", output_topic_.c_str());
+    
+    // Log target classes
+    std::stringstream target_classes_str;
+    bool first = true;
+    for (int class_id : target_classes_) {
+      if (!first) target_classes_str << ", ";
+      target_classes_str << class_id << "(" << getClassName(class_id) << ")";
+      first = false;
+    }
+    RCLCPP_INFO(this->get_logger(), "  target_classes: [%s]", target_classes_str.str().c_str());
   }
 
   void setup_subscription() {
@@ -281,7 +298,7 @@ private:
                           float confidence_threshold, int img_width,
                           int img_height, std::vector<cv::Rect> &boxes,
                           std::vector<float> &confidences,
-                          std::vector<int> &class_ids) {
+                          std::vector<int> &class_ids, bool apply_class_filter = true) {
     // YOLOv8 output shape: [1, 84, num_detections] (e.g., 2100 for 320x320, 8400 for 640x640)
     int num_detections = shape[2]; 
     int num_features = shape[1];   // 84
@@ -296,15 +313,18 @@ private:
       auto class_result = find_best_class(output_data, i, num_features, num_detections);
 
       if (class_result.confidence > confidence_threshold) {
-        // Convert to actual image coordinates
-        int x = static_cast<int>((cx - w / 2) * img_width / input_size_);
-        int y = static_cast<int>((cy - h / 2) * img_height / input_size_);
-        int width = static_cast<int>(w * img_width / input_size_);
-        int height = static_cast<int>(h * img_height / input_size_);
+        // Filter by target classes (only if apply_class_filter is true)
+        if (!apply_class_filter || target_classes_.empty() || target_classes_.count(class_result.class_id) > 0) {
+          // Convert to actual image coordinates
+          int x = static_cast<int>((cx - w / 2) * img_width / input_size_);
+          int y = static_cast<int>((cy - h / 2) * img_height / input_size_);
+          int width = static_cast<int>(w * img_width / input_size_);
+          int height = static_cast<int>(h * img_height / input_size_);
 
-        boxes.emplace_back(x, y, width, height);
-        confidences.push_back(class_result.confidence);
-        class_ids.push_back(class_result.class_id);
+          boxes.emplace_back(x, y, width, height);
+          confidences.push_back(class_result.confidence);
+          class_ids.push_back(class_result.class_id);
+        }
       }
     }
   }
@@ -457,7 +477,7 @@ private:
     std::vector<int> class_ids;
 
     extract_detections(output_data, shape, confidence_threshold_, img_width,
-                       img_height, boxes, confidences, class_ids);
+                       img_height, boxes, confidences, class_ids, true);  // apply_class_filter = true
 
     // Apply non-maximum suppression
     std::vector<int> indices;
@@ -506,7 +526,7 @@ private:
       std::vector<int> class_ids;
 
       extract_detections(output_data, shape, confidence_threshold_, img_width,
-                         img_height, boxes, confidences, class_ids);
+                         img_height, boxes, confidences, class_ids, true);  // apply_class_filter = true
 
       // Apply non-maximum suppression
       std::vector<int> indices;
@@ -555,7 +575,7 @@ private:
     std::vector<int> class_ids;
 
     extract_detections(output_data, shape, confidence_threshold_, img_width,
-                       img_height, boxes, confidences, class_ids);
+                       img_height, boxes, confidences, class_ids, false);  // apply_class_filter = false
 
     // Apply non-maximum suppression
     std::vector<int> indices;
@@ -569,26 +589,40 @@ private:
   process_yolo_output_with_results(cv::Mat &image, float *output_data,
                                    const std::vector<int64_t> &shape,
                                    int img_width, int img_height) {
-    std::vector<cv::Rect> boxes;
-    std::vector<float> confidences;
-    std::vector<int> class_ids;
+    // For drawing: get all objects (no class filtering)
+    std::vector<cv::Rect> all_boxes;
+    std::vector<float> all_confidences;
+    std::vector<int> all_class_ids;
 
     extract_detections(output_data, shape, confidence_threshold_, img_width,
-                       img_height, boxes, confidences, class_ids);
+                       img_height, all_boxes, all_confidences, all_class_ids, false);  // apply_class_filter = false
 
-    // Apply non-maximum suppression
-    std::vector<int> indices;
-    cv::dnn::NMSBoxes(boxes, confidences, confidence_threshold_, nms_threshold_,
-                      indices);
+    // Apply non-maximum suppression to all objects
+    std::vector<int> all_indices;
+    cv::dnn::NMSBoxes(all_boxes, all_confidences, confidence_threshold_, nms_threshold_,
+                      all_indices);
 
-    draw_detection_results(image, boxes, confidences, class_ids, indices);
+    draw_detection_results(image, all_boxes, all_confidences, all_class_ids, all_indices);
 
-    // Collect detection results
+    // For results: get filtered objects only
+    std::vector<cv::Rect> filtered_boxes;
+    std::vector<float> filtered_confidences;
+    std::vector<int> filtered_class_ids;
+
+    extract_detections(output_data, shape, confidence_threshold_, img_width,
+                       img_height, filtered_boxes, filtered_confidences, filtered_class_ids, true);  // apply_class_filter = true
+
+    // Apply non-maximum suppression to filtered objects
+    std::vector<int> filtered_indices;
+    cv::dnn::NMSBoxes(filtered_boxes, filtered_confidences, confidence_threshold_, nms_threshold_,
+                      filtered_indices);
+
+    // Collect detection results from filtered objects
     DetectionResults results;
-    results.total_detections = indices.size();
+    results.total_detections = filtered_indices.size();
 
-    for (int idx : indices) {
-      int class_id = class_ids[idx];
+    for (int idx : filtered_indices) {
+      int class_id = filtered_class_ids[idx];
       results.class_counts[class_id]++;
     }
 
@@ -661,6 +695,9 @@ private:
   // Input timestamp and frame_id for detection results
   rclcpp::Time input_timestamp_;
   std::string input_frame_id_;
+  
+  // Target class IDs for filtering
+  std::set<int> target_classes_;
 };
 
 int main(int argc, char *argv[]) {

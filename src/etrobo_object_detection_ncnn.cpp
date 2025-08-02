@@ -7,6 +7,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <set>
 #include <sstream>
 #include <vector>
 #include <vision_msgs/msg/bounding_box2_d.hpp>
@@ -99,6 +100,14 @@ private:
     this->declare_parameter("output_topic",
                             "/object_detection/image/compressed");
     output_topic_ = this->get_parameter("output_topic").as_string();
+    this->declare_parameter("target_classes",
+                            std::vector<int64_t>{39}); // bottle only
+    auto target_classes_param =
+        this->get_parameter("target_classes").as_integer_array();
+    target_classes_.clear();
+    for (auto class_id : target_classes_param) {
+      target_classes_.insert(static_cast<int>(class_id));
+    }
 
     RCLCPP_INFO(this->get_logger(), "Parameters:");
     RCLCPP_INFO(this->get_logger(), "  param_path: %s", param_path_.c_str());
@@ -112,6 +121,18 @@ private:
                 use_vulkan_ ? "true" : "false");
     RCLCPP_INFO(this->get_logger(), "  output_topic: %s",
                 output_topic_.c_str());
+
+    // Log target classes
+    std::stringstream target_classes_str;
+    bool first = true;
+    for (int class_id : target_classes_) {
+      if (!first)
+        target_classes_str << ", ";
+      target_classes_str << class_id << "(" << getClassName(class_id) << ")";
+      first = false;
+    }
+    RCLCPP_INFO(this->get_logger(), "  target_classes: [%s]",
+                target_classes_str.str().c_str());
   }
 
   void setup_subscription() {
@@ -235,7 +256,8 @@ private:
 
   void generate_proposals(const ncnn::Mat &pred, int stride,
                           const ncnn::Mat &in_pad, float prob_threshold,
-                          std::vector<Object> &objects) {
+                          std::vector<Object> &objects,
+                          bool apply_class_filter = true) {
     const int w = in_pad.w;
     const int h = in_pad.h;
 
@@ -306,15 +328,19 @@ private:
           float x1 = pb_cx + pred_ltrb[2];
           float y1 = pb_cy + pred_ltrb[3];
 
-          Object obj;
-          obj.rect.x = x0;
-          obj.rect.y = y0;
-          obj.rect.width = x1 - x0;
-          obj.rect.height = y1 - y0;
-          obj.label = label;
-          obj.prob = score;
+          // Filter by target classes (only if apply_class_filter is true)
+          if (!apply_class_filter || target_classes_.empty() ||
+              target_classes_.count(label) > 0) {
+            Object obj;
+            obj.rect.x = x0;
+            obj.rect.y = y0;
+            obj.rect.width = x1 - x0;
+            obj.rect.height = y1 - y0;
+            obj.label = label;
+            obj.prob = score;
 
-          objects.push_back(obj);
+            objects.push_back(obj);
+          }
         }
       }
     }
@@ -323,7 +349,8 @@ private:
   void generate_proposals(const ncnn::Mat &pred,
                           const std::vector<int> &strides,
                           const ncnn::Mat &in_pad, float prob_threshold,
-                          std::vector<Object> &objects) {
+                          std::vector<Object> &objects,
+                          bool apply_class_filter = true) {
     const int w = in_pad.w;
     const int h = in_pad.h;
 
@@ -336,12 +363,13 @@ private:
       const int num_grid = num_grid_x * num_grid_y;
 
       generate_proposals(pred.row_range(pred_row_offset, num_grid), stride,
-                         in_pad, prob_threshold, objects);
+                         in_pad, prob_threshold, objects, apply_class_filter);
       pred_row_offset += num_grid;
     }
   }
 
-  int detect_yolov8(const cv::Mat &bgr, std::vector<Object> &objects) {
+  int detect_yolov8(const cv::Mat &bgr, std::vector<Object> &objects,
+                    bool apply_class_filter = true) {
     const int target_size = 320;
     const float prob_threshold = confidence_threshold_;
     const float nms_threshold = nms_threshold_;
@@ -387,7 +415,8 @@ private:
     ex.extract("out0", out);
 
     std::vector<Object> proposals;
-    generate_proposals(out, strides, in_pad, prob_threshold, proposals);
+    generate_proposals(out, strides, in_pad, prob_threshold, proposals,
+                       apply_class_filter);
 
     qsort_descent_inplace(proposals);
 
@@ -537,18 +566,24 @@ private:
     auto total_start = std::chrono::steady_clock::now();
     auto preprocess_start = std::chrono::steady_clock::now();
 
-    std::vector<Object> objects;
     auto preprocess_end = std::chrono::steady_clock::now();
     auto inference_start = std::chrono::steady_clock::now();
 
-    detect_yolov8(image, objects);
+    // For drawing: get all objects (no class filtering)
+    std::vector<Object> all_objects;
+    detect_yolov8(image, all_objects, false); // apply_class_filter = false
+
+    // For Detection2DArray: get filtered objects only
+    std::vector<Object> filtered_objects;
+    detect_yolov8(image, filtered_objects, true); // apply_class_filter = true
 
     auto inference_end = std::chrono::steady_clock::now();
     auto postprocess_start = std::chrono::steady_clock::now();
 
-    DetectionResults detection_results = process_detection_results(objects);
+    DetectionResults detection_results =
+        process_detection_results(filtered_objects);
     if (draw_results) {
-      draw_detection_results(result, objects);
+      draw_detection_results(result, all_objects); // Draw all objects
     }
 
     auto postprocess_end = std::chrono::steady_clock::now();
@@ -570,8 +605,8 @@ private:
     log_detection_results(detection_results, image.cols, image.rows, total_ms,
                           preprocess_ms, inference_ms, postprocess_ms);
 
-    // Publish detection results
-    publish_detections(objects, input_timestamp_, input_frame_id_);
+    // Publish detection results (filtered objects only)
+    publish_detections(filtered_objects, input_timestamp_, input_frame_id_);
 
     return result;
   }
@@ -660,6 +695,9 @@ private:
   // Input timestamp and frame_id for detection results
   rclcpp::Time input_timestamp_;
   std::string input_frame_id_;
+
+  // Target class IDs for filtering
+  std::set<int> target_classes_;
 };
 
 int main(int argc, char *argv[]) {
