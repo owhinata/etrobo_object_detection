@@ -9,6 +9,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(vision_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
 find_package(OpenCV REQUIRED)
@@ -93,6 +94,7 @@ set_target_properties(etrobo_object_detection_ncnn PROPERTIES
 ament_target_dependencies(etrobo_object_detection
   rclcpp
   sensor_msgs
+  vision_msgs
   cv_bridge
   image_transport
 )
@@ -100,6 +102,7 @@ ament_target_dependencies(etrobo_object_detection
 ament_target_dependencies(etrobo_object_detection_ncnn
   rclcpp
   sensor_msgs
+  vision_msgs
   cv_bridge
   image_transport
 )

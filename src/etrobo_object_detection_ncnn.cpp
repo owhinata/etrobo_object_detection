@@ -7,6 +7,10 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
+#include <vision_msgs/msg/detection2_d_array.hpp>
+#include <vision_msgs/msg/detection2_d.hpp>
+#include <vision_msgs/msg/bounding_box2_d.hpp>
+#include <vision_msgs/msg/object_hypothesis_with_pose.hpp>
 #include <sstream>
 #include <vector>
 
@@ -124,6 +128,9 @@ private:
 
     image_publisher_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
         output_topic_, qos);
+    
+    detection_publisher_ = this->create_publisher<vision_msgs::msg::Detection2DArray>(
+        "/object_detection/detections", qos);
   }
 
   void initialize_ncnn_network() {
@@ -485,6 +492,14 @@ private:
 
   void image_callback(const sensor_msgs::msg::Image::SharedPtr msg) {
     try {
+      // Store input timestamp and frame_id for detection results
+      input_timestamp_ = msg->header.stamp;
+      input_frame_id_ = msg->header.frame_id;
+      
+      // Debug: Log input timestamp and frame_id
+      RCLCPP_DEBUG(this->get_logger(), "Input timestamp: %.0f.%09ld, frame_id: '%s'", 
+                   input_timestamp_.seconds(), input_timestamp_.nanoseconds(), input_frame_id_.c_str());
+      
       cv_bridge::CvImagePtr cv_ptr =
           cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
       cv::Mat img = cv_ptr->image;
@@ -549,6 +564,9 @@ private:
     log_detection_results(detection_results, image.cols, image.rows, total_ms,
                           preprocess_ms, inference_ms, postprocess_ms);
 
+    // Publish detection results
+    publish_detections(objects, input_timestamp_, input_frame_id_);
+
     return result;
   }
 
@@ -574,8 +592,44 @@ private:
     }
   }
 
+  void publish_detections(const std::vector<Object> &objects, const rclcpp::Time &timestamp, const std::string &frame_id) {
+    try {
+      // Create Detection2DArray message
+      auto detection_msg = std::make_unique<vision_msgs::msg::Detection2DArray>();
+      detection_msg->header.stamp = timestamp;
+      detection_msg->header.frame_id = frame_id.empty() ? "camera_frame" : frame_id;
+
+      // Add detections (even if empty)
+      for (const auto &obj : objects) {
+        vision_msgs::msg::Detection2D detection;
+        
+        // Set bounding box
+        detection.bbox.center.position.x = obj.rect.x + obj.rect.width / 2.0;
+        detection.bbox.center.position.y = obj.rect.y + obj.rect.height / 2.0;
+        detection.bbox.center.theta = 0.0;
+        detection.bbox.size_x = obj.rect.width;
+        detection.bbox.size_y = obj.rect.height;
+
+        // Set detection hypothesis
+        vision_msgs::msg::ObjectHypothesisWithPose hypothesis;
+        hypothesis.hypothesis.class_id = std::to_string(obj.label);
+        hypothesis.hypothesis.score = obj.prob;
+        detection.results.push_back(hypothesis);
+
+        detection_msg->detections.push_back(detection);
+      }
+
+      // Publish detection results (always publish, even if empty)
+      detection_publisher_->publish(std::move(detection_msg));
+
+    } catch (const std::exception &e) {
+      RCLCPP_WARN(this->get_logger(), "Failed to publish detections: %s", e.what());
+    }
+  }
+
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subscription_;
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr image_publisher_;
+  rclcpp::Publisher<vision_msgs::msg::Detection2DArray>::SharedPtr detection_publisher_;
 
   std::string param_path_;
   std::string bin_path_;
@@ -588,6 +642,10 @@ private:
 
   std::unique_ptr<ncnn::Net> net_;
   std::vector<std::string> coco_labels_;
+  
+  // Input timestamp and frame_id for detection results
+  rclcpp::Time input_timestamp_;
+  std::string input_frame_id_;
 };
 
 int main(int argc, char *argv[]) {

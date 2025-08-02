@@ -8,6 +8,10 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
+#include <vision_msgs/msg/detection2_d_array.hpp>
+#include <vision_msgs/msg/detection2_d.hpp>
+#include <vision_msgs/msg/bounding_box2_d.hpp>
+#include <vision_msgs/msg/object_hypothesis_with_pose.hpp>
 #include <sstream>
 #include <vector>
 
@@ -121,6 +125,9 @@ private:
 
     image_publisher_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
         output_topic_, qos);
+    
+    detection_publisher_ = this->create_publisher<vision_msgs::msg::Detection2DArray>(
+        "/object_detection/detections", qos);
   }
 
   void initialize_onnx_runtime() {
@@ -330,6 +337,10 @@ private:
 
   void image_callback(const sensor_msgs::msg::Image::SharedPtr msg) {
     try {
+      // Store input timestamp and frame_id for detection results
+      input_timestamp_ = msg->header.stamp;
+      input_frame_id_ = msg->header.frame_id;
+      
       // Convert ROS image to OpenCV format
       cv_bridge::CvImagePtr cv_ptr =
           cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
@@ -404,6 +415,9 @@ private:
           detection_results = process_yolo_output_no_draw(
               output_data, shape, image.cols, image.rows);
         }
+        
+        // Publish detection results
+        publish_detections(output_data, shape, image.cols, image.rows, input_timestamp_, input_frame_id_);
       }
 
       auto postprocess_end = std::chrono::steady_clock::now();
@@ -481,6 +495,54 @@ private:
 
     } catch (const std::exception &e) {
       RCLCPP_WARN(this->get_logger(), "Failed to publish result image: %s", e.what());
+    }
+  }
+
+  void publish_detections(float *output_data, const std::vector<int64_t> &shape,
+                         int img_width, int img_height, const rclcpp::Time &timestamp, const std::string &frame_id) {
+    try {
+      std::vector<cv::Rect> boxes;
+      std::vector<float> confidences;
+      std::vector<int> class_ids;
+
+      extract_detections(output_data, shape, confidence_threshold_, img_width,
+                         img_height, boxes, confidences, class_ids);
+
+      // Apply non-maximum suppression
+      std::vector<int> indices;
+      cv::dnn::NMSBoxes(boxes, confidences, confidence_threshold_, nms_threshold_,
+                        indices);
+
+      // Create Detection2DArray message
+      auto detection_msg = std::make_unique<vision_msgs::msg::Detection2DArray>();
+      detection_msg->header.stamp = timestamp;
+      detection_msg->header.frame_id = frame_id.empty() ? "camera_frame" : frame_id;
+
+      // Add detections (even if empty)
+      for (int idx : indices) {
+        vision_msgs::msg::Detection2D detection;
+        
+        // Set bounding box
+        detection.bbox.center.position.x = boxes[idx].x + boxes[idx].width / 2.0;
+        detection.bbox.center.position.y = boxes[idx].y + boxes[idx].height / 2.0;
+        detection.bbox.center.theta = 0.0;
+        detection.bbox.size_x = boxes[idx].width;
+        detection.bbox.size_y = boxes[idx].height;
+
+        // Set detection hypothesis
+        vision_msgs::msg::ObjectHypothesisWithPose hypothesis;
+        hypothesis.hypothesis.class_id = std::to_string(class_ids[idx]);
+        hypothesis.hypothesis.score = confidences[idx];
+        detection.results.push_back(hypothesis);
+
+        detection_msg->detections.push_back(detection);
+      }
+
+      // Publish detection results (always publish, even if empty)
+      detection_publisher_->publish(std::move(detection_msg));
+
+    } catch (const std::exception &e) {
+      RCLCPP_WARN(this->get_logger(), "Failed to publish detections: %s", e.what());
     }
   }
 
@@ -570,6 +632,7 @@ private:
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subscription_;
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr image_publisher_;
+  rclcpp::Publisher<vision_msgs::msg::Detection2DArray>::SharedPtr detection_publisher_;
 
   // ROS2 parameters
   std::string model_path_;
@@ -594,6 +657,10 @@ private:
 
   // COCO class labels
   std::vector<std::string> coco_labels_;
+  
+  // Input timestamp and frame_id for detection results
+  rclcpp::Time input_timestamp_;
+  std::string input_frame_id_;
 };
 
 int main(int argc, char *argv[]) {
