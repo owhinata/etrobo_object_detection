@@ -84,16 +84,17 @@ private:
     // Model parameters
     this->declare_parameter("model_path", "yolov8n.ncnn.bin");
     this->declare_parameter("input_size", 320);
-    
+
     // Inference parameters
     this->declare_parameter("confidence_threshold", 0.25);
     this->declare_parameter("nms_threshold", 0.4);
-    this->declare_parameter("target_classes", std::vector<int64_t>{39}); // bottle only
-    
+    this->declare_parameter("target_classes",
+                            std::vector<int64_t>{39}); // bottle only
+
     // Runtime parameters
     this->declare_parameter("num_threads", 1);
     this->declare_parameter("use_vulkan", true);
-    
+
     // I/O parameters
     this->declare_parameter("input_topic", "/image_raw");
     this->declare_parameter("output_topic", "/object_detection");
@@ -101,7 +102,7 @@ private:
     // Get model parameters
     model_path_ = this->get_parameter("model_path").as_string();
     input_size_ = this->get_parameter("input_size").as_int();
-    
+
     // Generate param path by changing extension from .bin to .param
     param_path_ = model_path_;
     size_t last_dot = param_path_.find_last_of(".");
@@ -110,20 +111,22 @@ private:
     } else {
       param_path_ = param_path_ + ".param";
     }
-    
+
     // Get inference parameters
-    confidence_threshold_ = this->get_parameter("confidence_threshold").as_double();
+    confidence_threshold_ =
+        this->get_parameter("confidence_threshold").as_double();
     nms_threshold_ = this->get_parameter("nms_threshold").as_double();
-    auto target_classes_param = this->get_parameter("target_classes").as_integer_array();
+    auto target_classes_param =
+        this->get_parameter("target_classes").as_integer_array();
     target_classes_.clear();
     for (auto class_id : target_classes_param) {
       target_classes_.insert(static_cast<int>(class_id));
     }
-    
+
     // Get runtime parameters
     num_threads_ = this->get_parameter("num_threads").as_int();
     use_vulkan_ = this->get_parameter("use_vulkan").as_bool();
-    
+
     // Get I/O parameters
     input_topic_ = this->get_parameter("input_topic").as_string();
     output_topic_ = this->get_parameter("output_topic").as_string();
@@ -132,18 +135,21 @@ private:
     // Model parameters
     RCLCPP_INFO(this->get_logger(), "  model_path: %s", model_path_.c_str());
     RCLCPP_INFO(this->get_logger(), "  input_size: %d", input_size_);
-    
+
     // Inference parameters
-    RCLCPP_INFO(this->get_logger(), "  confidence_threshold: %.2f", confidence_threshold_);
+    RCLCPP_INFO(this->get_logger(), "  confidence_threshold: %.2f",
+                confidence_threshold_);
     RCLCPP_INFO(this->get_logger(), "  nms_threshold: %.2f", nms_threshold_);
-    
+
     // Runtime parameters
     RCLCPP_INFO(this->get_logger(), "  num_threads: %d", num_threads_);
-    RCLCPP_INFO(this->get_logger(), "  use_vulkan: %s", use_vulkan_ ? "true" : "false");
-    
+    RCLCPP_INFO(this->get_logger(), "  use_vulkan: %s",
+                use_vulkan_ ? "true" : "false");
+
     // I/O parameters
     RCLCPP_INFO(this->get_logger(), "  input_topic: %s", input_topic_.c_str());
-    RCLCPP_INFO(this->get_logger(), "  output_topic: %s", output_topic_.c_str());
+    RCLCPP_INFO(this->get_logger(), "  output_topic: %s",
+                output_topic_.c_str());
 
     // Log target classes
     std::stringstream target_classes_str;
@@ -173,8 +179,8 @@ private:
     qos.best_effort();
 
     image_publisher_ =
-        this->create_publisher<sensor_msgs::msg::CompressedImage>(output_topic_ + "/image/compressed",
-                                                                  qos);
+        this->create_publisher<sensor_msgs::msg::CompressedImage>(
+            output_topic_ + "/image/compressed", qos);
 
     detection_publisher_ =
         this->create_publisher<vision_msgs::msg::Detection2DArray>(
@@ -543,7 +549,8 @@ private:
     RCLCPP_INFO(this->get_logger(),
                 "Speed: %.1fms preprocess, %.1fms inference, %.1fms "
                 "postprocess per image at shape (1, 3, %d, %d)",
-                preprocess_ms, inference_ms, postprocess_ms, input_size_, input_size_);
+                preprocess_ms, inference_ms, postprocess_ms, input_size_,
+                input_size_);
   }
 
   void image_callback(const sensor_msgs::msg::Image::SharedPtr msg) {
@@ -705,18 +712,18 @@ private:
 
   // Model parameters
   std::string model_path_;
-  std::string param_path_;  // Auto-generated from model_path
+  std::string param_path_; // Auto-generated from model_path
   int input_size_;
-  
+
   // Inference parameters
   double confidence_threshold_;
   double nms_threshold_;
   std::set<int> target_classes_;
-  
+
   // Runtime parameters
   int num_threads_;
   bool use_vulkan_;
-  
+
   // I/O parameters
   std::string input_topic_;
   std::string output_topic_;
