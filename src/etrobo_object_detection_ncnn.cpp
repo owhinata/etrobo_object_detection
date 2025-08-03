@@ -25,10 +25,54 @@ struct Object {
 };
 
 class ObjectDetectionNCNNNode : public rclcpp::Node {
+private:
+  // YOLO model constants
+  static constexpr int REG_MAX = 16;
+  static constexpr int STRIDE_8 = 8;
+  static constexpr int STRIDE_16 = 16;
+  static constexpr int STRIDE_32 = 32;
+  static constexpr int MAX_STRIDE = 32;
+  static constexpr float PADDING_VALUE = 114.0f;
+  static constexpr float NORMALIZATION_FACTOR = 1.0f / 255.0f;
+
+  // Helper function for timing calculations
+  double calculate_duration_ms(const std::chrono::steady_clock::time_point& start,
+                              const std::chrono::steady_clock::time_point& end) {
+    return std::chrono::duration<double, std::milli>(end - start).count();
+  }
+
+  // Helper function to clamp coordinate to image bounds
+  float clamp_to_image_bounds(float value, float max_value) {
+    return std::max(std::min(value, max_value - 1.0f), 0.0f);
+  }
+
+  // Filter objects by target classes
+  std::vector<Object> filter_objects_by_target_classes(const std::vector<Object>& all_objects) {
+    std::vector<Object> filtered_objects;
+    for (const auto &obj : all_objects) {
+      if (target_classes_.empty() || target_classes_.count(obj.label) > 0) {
+        filtered_objects.push_back(obj);
+      }
+    }
+    return filtered_objects;
+  }
+
+  // Draw results on image if requested
+  cv::Mat draw_results_if_needed(const cv::Mat& image, const std::vector<Object>& all_objects, bool draw_results) {
+    cv::Mat result;
+    if (draw_results) {
+      result = image.clone();
+      draw_detection_results(result, all_objects);
+    }
+    return result;
+  }
+
 public:
   ObjectDetectionNCNNNode() : Node("object_detection_ncnn") {
     initializeCocoLabels();
     declare_parameters();
+    get_parameters();
+    log_parameters();
 
     try {
       initialize_ncnn_network();
@@ -97,19 +141,15 @@ private:
     // I/O parameters
     this->declare_parameter("input_topic", "/image_raw");
     this->declare_parameter("output_topic", "/object_detection");
+  }
 
+  void get_parameters() {
     // Get model parameters
     model_path_ = this->get_parameter("model_path").as_string();
     input_size_ = this->get_parameter("input_size").as_int();
 
     // Generate param path by changing extension from .bin to .param
-    param_path_ = model_path_;
-    size_t last_dot = param_path_.find_last_of(".");
-    if (last_dot != std::string::npos) {
-      param_path_ = param_path_.substr(0, last_dot) + ".param";
-    } else {
-      param_path_ = param_path_ + ".param";
-    }
+    generate_param_path();
 
     // Get inference parameters
     confidence_threshold_ =
@@ -128,7 +168,19 @@ private:
     // Get I/O parameters
     input_topic_ = this->get_parameter("input_topic").as_string();
     output_topic_ = this->get_parameter("output_topic").as_string();
+  }
 
+  void generate_param_path() {
+    param_path_ = model_path_;
+    size_t last_dot = param_path_.find_last_of(".");
+    if (last_dot != std::string::npos) {
+      param_path_ = param_path_.substr(0, last_dot) + ".param";
+    } else {
+      param_path_ = param_path_ + ".param";
+    }
+  }
+
+  void log_parameters() {
     RCLCPP_INFO(this->get_logger(), "Parameters:");
     // Model parameters
     RCLCPP_INFO(this->get_logger(), "  model_path: %s", model_path_.c_str());
@@ -148,6 +200,10 @@ private:
                 output_topic_.c_str());
 
     // Log target classes
+    log_target_classes();
+  }
+
+  void log_target_classes() {
     std::stringstream target_classes_str;
     bool first = true;
     for (int class_id : target_classes_) {
@@ -160,9 +216,14 @@ private:
                 target_classes_str.str().c_str());
   }
 
-  void setup_subscription() {
+  rclcpp::QoS create_default_qos() {
     auto qos = rclcpp::QoS(rclcpp::KeepLast(10));
     qos.best_effort();
+    return qos;
+  }
+
+  void setup_subscription() {
+    auto qos = create_default_qos();
 
     subscription_ = this->create_subscription<sensor_msgs::msg::Image>(
         input_topic_, qos,
@@ -171,8 +232,7 @@ private:
   }
 
   void setup_publisher() {
-    auto qos = rclcpp::QoS(rclcpp::KeepLast(10));
-    qos.best_effort();
+    auto qos = create_default_qos();
 
     image_publisher_ =
         this->create_publisher<sensor_msgs::msg::CompressedImage>(
@@ -219,13 +279,13 @@ private:
                                     int right) {
     int i = left;
     int j = right;
-    float p = objects[(left + right) / 2].prob;
+    float pivot = objects[(left + right) / 2].prob;
 
     while (i <= j) {
-      while (objects[i].prob > p)
+      while (objects[i].prob > pivot)
         i++;
 
-      while (objects[j].prob < p)
+      while (objects[j].prob < pivot)
         j--;
 
       if (i <= j) {
@@ -260,17 +320,17 @@ private:
     for (int i = 0; i < n; i++) {
       const Object &a = objects[i];
 
-      int keep = 1;
+      bool should_keep = true;
       for (int j = 0; j < (int)picked.size(); j++) {
         const Object &b = objects[picked[j]];
 
         float inter_area = intersection_area(a, b);
         float union_area = areas[i] + areas[picked[j]] - inter_area;
         if (inter_area / union_area > nms_threshold)
-          keep = 0;
+          should_keep = false;
       }
 
-      if (keep)
+      if (should_keep)
         picked.push_back(i);
     }
   }
@@ -287,8 +347,7 @@ private:
     const int num_grid_x = w / stride;
     const int num_grid_y = h / stride;
 
-    const int reg_max_1 = 16;
-    const int num_class = pred.w - reg_max_1 * 4;
+    const int num_class = pred.w - REG_MAX * 4;
 
     for (int y = 0; y < num_grid_y; y++) {
       for (int x = 0; x < num_grid_x; x++) {
@@ -297,14 +356,13 @@ private:
         int label = -1;
         float score = -FLT_MAX;
         {
-          const ncnn::Mat pred_score =
-              pred_grid.range(reg_max_1 * 4, num_class);
+          const ncnn::Mat pred_score = pred_grid.range(REG_MAX * 4, num_class);
 
           for (int k = 0; k < num_class; k++) {
-            float s = pred_score[k];
-            if (s > score) {
+            float class_score = pred_score[k];
+            if (class_score > score) {
               label = k;
-              score = s;
+              score = class_score;
             }
           }
 
@@ -313,7 +371,7 @@ private:
 
         if (score >= prob_threshold) {
           ncnn::Mat pred_bbox =
-              pred_grid.range(0, reg_max_1 * 4).reshape(reg_max_1, 4);
+              pred_grid.range(0, REG_MAX * 4).reshape(REG_MAX, 4);
 
           {
             ncnn::Layer *softmax = ncnn::create_layer("Softmax");
@@ -337,7 +395,7 @@ private:
           for (int k = 0; k < 4; k++) {
             float dis = 0.f;
             const float *dis_after_sm = pred_bbox.row(k);
-            for (int l = 0; l < reg_max_1; l++) {
+            for (int l = 0; l < REG_MAX; l++) {
               dis += l * dis_after_sm[l];
             }
             pred_ltrb[k] = dis * stride;
@@ -400,11 +458,7 @@ private:
     int img_w = bgr.cols;
     int img_h = bgr.rows;
 
-    std::vector<int> strides(3);
-    strides[0] = 8;
-    strides[1] = 16;
-    strides[2] = 32;
-    const int max_stride = 32;
+    std::vector<int> strides = {STRIDE_8, STRIDE_16, STRIDE_32};
 
     // Calculate target dimensions
     int w = img_w;
@@ -421,8 +475,8 @@ private:
     }
 
     // Calculate padding
-    int wpad = (w + max_stride - 1) / max_stride * max_stride - w;
-    int hpad = (h + max_stride - 1) / max_stride * max_stride - h;
+    int wpad = (w + MAX_STRIDE - 1) / MAX_STRIDE * MAX_STRIDE - w;
+    int hpad = (h + MAX_STRIDE - 1) / MAX_STRIDE * MAX_STRIDE - h;
     int final_w = w + wpad;
     int final_h = h + hpad;
 
@@ -438,13 +492,14 @@ private:
           bgr.data, ncnn::Mat::PIXEL_BGR2RGB, img_w, img_h, w, h);
       ncnn::copy_make_border(resized, in_pad, hpad / 2, hpad - hpad / 2,
                              wpad / 2, wpad - wpad / 2, ncnn::BORDER_CONSTANT,
-                             114.f);
+                             PADDING_VALUE);
     } else {
       in_pad = in;
     }
 
     // Optimization 3: Normalization
-    const float norm_vals[3] = {1 / 255.f, 1 / 255.f, 1 / 255.f};
+    const float norm_vals[3] = {NORMALIZATION_FACTOR, NORMALIZATION_FACTOR,
+                                NORMALIZATION_FACTOR};
     in_pad.substract_mean_normalize(0, norm_vals);
 
     ncnn::Extractor ex = net_->create_extractor();
@@ -475,10 +530,10 @@ private:
       float y1 =
           (objects[i].rect.y + objects[i].rect.height - (hpad / 2)) / scale;
 
-      x0 = std::max(std::min(x0, (float)(img_w - 1)), 0.f);
-      y0 = std::max(std::min(y0, (float)(img_h - 1)), 0.f);
-      x1 = std::max(std::min(x1, (float)(img_w - 1)), 0.f);
-      y1 = std::max(std::min(y1, (float)(img_h - 1)), 0.f);
+      x0 = clamp_to_image_bounds(x0, static_cast<float>(img_w));
+      y0 = clamp_to_image_bounds(y0, static_cast<float>(img_h));
+      x1 = clamp_to_image_bounds(x1, static_cast<float>(img_w));
+      y1 = clamp_to_image_bounds(y1, static_cast<float>(img_h));
 
       objects[i].rect.x = x0;
       objects[i].rect.y = y0;
@@ -577,38 +632,21 @@ private:
     auto inference_end = std::chrono::steady_clock::now();
     auto postprocess_start = std::chrono::steady_clock::now();
 
-    // Filter objects for Detection2DArray output
-    std::vector<Object> filtered_objects;
-    for (const auto &obj : all_objects) {
-      if (target_classes_.empty() || target_classes_.count(obj.label) > 0) {
-        filtered_objects.push_back(obj);
-      }
-    }
+    // Filter objects and process results
+    std::vector<Object> filtered_objects = filter_objects_by_target_classes(all_objects);
+    DetectionResults detection_results = process_detection_results(filtered_objects);
 
-    DetectionResults detection_results =
-        process_detection_results(filtered_objects);
-
-    cv::Mat result;
-    if (draw_results) {
-      result = image.clone();
-      draw_detection_results(result, all_objects); // Draw all objects
-    }
+    // Draw results if needed
+    cv::Mat result = draw_results_if_needed(image, all_objects, draw_results);
 
     auto postprocess_end = std::chrono::steady_clock::now();
     auto total_end = std::chrono::steady_clock::now();
 
-    auto preprocess_ms = std::chrono::duration<double, std::milli>(
-                             preprocess_end - preprocess_start)
-                             .count();
-    auto inference_ms = std::chrono::duration<double, std::milli>(
-                            inference_end - inference_start)
-                            .count();
-    auto postprocess_ms = std::chrono::duration<double, std::milli>(
-                              postprocess_end - postprocess_start)
-                              .count();
-    auto total_ms =
-        std::chrono::duration<double, std::milli>(total_end - total_start)
-            .count();
+    // Calculate and log timing
+    auto preprocess_ms = calculate_duration_ms(preprocess_start, preprocess_end);
+    auto inference_ms = calculate_duration_ms(inference_start, inference_end);
+    auto postprocess_ms = calculate_duration_ms(postprocess_start, postprocess_end);
+    auto total_ms = calculate_duration_ms(total_start, total_end);
 
     log_detection_results(detection_results, image.cols, image.rows, total_ms,
                           preprocess_ms, inference_ms, postprocess_ms);
