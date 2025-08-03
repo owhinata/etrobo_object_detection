@@ -5,10 +5,10 @@
 #include <memory>
 #include <opencv2/opencv.hpp>
 #include <rclcpp/rclcpp.hpp>
-#include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <set>
 #include <sstream>
+#include <std_msgs/msg/header.hpp>
 #include <vector>
 #include <vision_msgs/msg/bounding_box2_d.hpp>
 #include <vision_msgs/msg/detection2_d.hpp>
@@ -36,8 +36,9 @@ private:
   static constexpr float NORMALIZATION_FACTOR = 1.0f / 255.0f;
 
   // Helper function for timing calculations
-  double calculate_duration_ms(const std::chrono::steady_clock::time_point& start,
-                              const std::chrono::steady_clock::time_point& end) {
+  double
+  calculate_duration_ms(const std::chrono::steady_clock::time_point &start,
+                        const std::chrono::steady_clock::time_point &end) {
     return std::chrono::duration<double, std::milli>(end - start).count();
   }
 
@@ -47,7 +48,8 @@ private:
   }
 
   // Filter objects by target classes
-  std::vector<Object> filter_objects_by_target_classes(const std::vector<Object>& all_objects) {
+  std::vector<Object>
+  filter_objects_by_target_classes(const std::vector<Object> &all_objects) {
     std::vector<Object> filtered_objects;
     for (const auto &obj : all_objects) {
       if (target_classes_.empty() || target_classes_.count(obj.label) > 0) {
@@ -58,7 +60,9 @@ private:
   }
 
   // Draw results on image if requested
-  cv::Mat draw_results_if_needed(const cv::Mat& image, const std::vector<Object>& all_objects, bool draw_results) {
+  cv::Mat draw_results_if_needed(const cv::Mat &image,
+                                 const std::vector<Object> &all_objects,
+                                 bool draw_results) {
     cv::Mat result;
     if (draw_results) {
       result = image.clone();
@@ -222,6 +226,12 @@ private:
     return qos;
   }
 
+  rclcpp::QoS create_reliable_qos() {
+    auto qos = rclcpp::QoS(rclcpp::KeepLast(10));
+    qos.reliable();
+    return qos;
+  }
+
   void setup_subscription() {
     auto qos = create_default_qos();
 
@@ -232,15 +242,16 @@ private:
   }
 
   void setup_publisher() {
-    auto qos = create_default_qos();
+    auto default_qos = create_default_qos();
+    auto reliable_qos = create_reliable_qos();
 
-    image_publisher_ =
-        this->create_publisher<sensor_msgs::msg::CompressedImage>(
-            output_topic_ + "/image/compressed", qos);
+    // Raw image publisher only with reliable QoS
+    image_publisher_ = this->create_publisher<sensor_msgs::msg::Image>(
+        output_topic_ + "/image", reliable_qos);
 
     detection_publisher_ =
         this->create_publisher<vision_msgs::msg::Detection2DArray>(
-            output_topic_ + "/detections", qos);
+            output_topic_ + "/detections", default_qos);
   }
 
   void initialize_ncnn_network() {
@@ -633,8 +644,10 @@ private:
     auto postprocess_start = std::chrono::steady_clock::now();
 
     // Filter objects and process results
-    std::vector<Object> filtered_objects = filter_objects_by_target_classes(all_objects);
-    DetectionResults detection_results = process_detection_results(filtered_objects);
+    std::vector<Object> filtered_objects =
+        filter_objects_by_target_classes(all_objects);
+    DetectionResults detection_results =
+        process_detection_results(filtered_objects);
 
     // Draw results if needed
     cv::Mat result = draw_results_if_needed(image, all_objects, draw_results);
@@ -643,9 +656,11 @@ private:
     auto total_end = std::chrono::steady_clock::now();
 
     // Calculate and log timing
-    auto preprocess_ms = calculate_duration_ms(preprocess_start, preprocess_end);
+    auto preprocess_ms =
+        calculate_duration_ms(preprocess_start, preprocess_end);
     auto inference_ms = calculate_duration_ms(inference_start, inference_end);
-    auto postprocess_ms = calculate_duration_ms(postprocess_start, postprocess_end);
+    auto postprocess_ms =
+        calculate_duration_ms(postprocess_start, postprocess_end);
     auto total_ms = calculate_duration_ms(total_start, total_end);
 
     log_detection_results(detection_results, image.cols, image.rows, total_ms,
@@ -693,20 +708,12 @@ private:
 
   void publish_result_image(const cv::Mat &image) {
     try {
-      // Compress image to JPEG
-      std::vector<uchar> buffer;
-      std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};
-      cv::imencode(".jpg", image, buffer, params);
-
-      // Create compressed image message
-      auto msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
+      // Publish raw image only
+      auto msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", image)
+                     .toImageMsg();
       msg->header.stamp = this->get_clock()->now();
       msg->header.frame_id = "camera_frame";
-      msg->format = "jpeg";
-      msg->data = buffer;
-
-      // Publish the compressed image
-      image_publisher_->publish(std::move(msg));
+      image_publisher_->publish(*msg);
 
     } catch (const std::exception &e) {
       RCLCPP_WARN(this->get_logger(), "Failed to publish result image: %s",
@@ -755,8 +762,7 @@ private:
   }
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subscription_;
-  rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr
-      image_publisher_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_publisher_;
   rclcpp::Publisher<vision_msgs::msg::Detection2DArray>::SharedPtr
       detection_publisher_;
 

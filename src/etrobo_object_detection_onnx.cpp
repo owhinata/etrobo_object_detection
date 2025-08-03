@@ -6,10 +6,10 @@
 #include <onnxruntime_cxx_api.h>
 #include <opencv2/opencv.hpp>
 #include <rclcpp/rclcpp.hpp>
-#include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <set>
 #include <sstream>
+#include <std_msgs/msg/header.hpp>
 #include <vector>
 #include <vision_msgs/msg/bounding_box2_d.hpp>
 #include <vision_msgs/msg/detection2_d.hpp>
@@ -158,17 +158,29 @@ private:
                   std::placeholders::_1));
   }
 
-  void setup_publisher() {
+  rclcpp::QoS create_reliable_qos() {
+    auto qos = rclcpp::QoS(rclcpp::KeepLast(10));
+    qos.reliable();
+    return qos;
+  }
+
+  rclcpp::QoS create_default_qos() {
     auto qos = rclcpp::QoS(rclcpp::KeepLast(10));
     qos.best_effort();
+    return qos;
+  }
 
-    image_publisher_ =
-        this->create_publisher<sensor_msgs::msg::CompressedImage>(
-            output_topic_ + "/image/compressed", qos);
+  void setup_publisher() {
+    auto default_qos = create_default_qos();
+    auto reliable_qos = create_reliable_qos();
+
+    // Raw image publisher only with reliable QoS
+    image_publisher_ = this->create_publisher<sensor_msgs::msg::Image>(
+        output_topic_ + "/image", reliable_qos);
 
     detection_publisher_ =
         this->create_publisher<vision_msgs::msg::Detection2DArray>(
-            output_topic_ + "/detections", qos);
+            output_topic_ + "/detections", default_qos);
   }
 
   void initialize_onnx_runtime() {
@@ -420,7 +432,7 @@ private:
 
   cv::Mat perform_detection(const cv::Mat &image, bool draw_results = true) {
     cv::Mat result;
-    
+
     // Timing measurements
     auto total_start = std::chrono::steady_clock::now();
     auto preprocess_start = std::chrono::steady_clock::now();
@@ -453,7 +465,7 @@ private:
 
       // Single unified processing: extract all detections once
       DetectionResults detection_results;
-      
+
       if (!output_tensors.empty()) {
         auto &output_tensor = output_tensors[0];
         auto tensor_info = output_tensor.GetTensorTypeAndShapeInfo();
@@ -464,21 +476,23 @@ private:
         std::vector<cv::Rect> all_boxes;
         std::vector<float> all_confidences;
         std::vector<int> all_class_ids;
-        extract_detections(output_data, shape, confidence_threshold_, image.cols,
-                          image.rows, all_boxes, all_confidences, all_class_ids,
-                          false); // apply_class_filter = false
+        extract_detections(output_data, shape, confidence_threshold_,
+                           image.cols, image.rows, all_boxes, all_confidences,
+                           all_class_ids,
+                           false); // apply_class_filter = false
 
         // Apply NMS to all detections
         std::vector<int> nms_indices;
         cv::dnn::NMSBoxes(all_boxes, all_confidences, confidence_threshold_,
-                         nms_threshold_, nms_indices);
+                          nms_threshold_, nms_indices);
 
         // Filter results for publishing (target_classes only)
         std::vector<cv::Rect> filtered_boxes;
         std::vector<float> filtered_confidences;
         std::vector<int> filtered_class_ids;
         for (int idx : nms_indices) {
-          if (target_classes_.empty() || target_classes_.count(all_class_ids[idx]) > 0) {
+          if (target_classes_.empty() ||
+              target_classes_.count(all_class_ids[idx]) > 0) {
             filtered_boxes.push_back(all_boxes[idx]);
             filtered_confidences.push_back(all_confidences[idx]);
             filtered_class_ids.push_back(all_class_ids[idx]);
@@ -494,12 +508,14 @@ private:
         // Draw results only when needed (delayed image cloning)
         if (draw_results) {
           result = image.clone();
-          draw_detections_on_image(result, all_boxes, all_confidences, all_class_ids, nms_indices);
+          draw_detections_on_image(result, all_boxes, all_confidences,
+                                   all_class_ids, nms_indices);
         }
 
         // Publish filtered detection results
-        publish_detections_from_vectors(filtered_boxes, filtered_confidences, filtered_class_ids,
-                                       input_timestamp_, input_frame_id_);
+        publish_detections_from_vectors(filtered_boxes, filtered_confidences,
+                                        filtered_class_ids, input_timestamp_,
+                                        input_frame_id_);
       }
 
       auto postprocess_end = std::chrono::steady_clock::now();
@@ -562,20 +578,12 @@ private:
 
   void publish_result_image(const cv::Mat &image) {
     try {
-      // Compress image to JPEG
-      std::vector<uchar> buffer;
-      std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};
-      cv::imencode(".jpg", image, buffer, params);
-
-      // Create compressed image message
-      auto msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
+      // Publish raw image only
+      auto msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", image)
+                     .toImageMsg();
       msg->header.stamp = this->get_clock()->now();
       msg->header.frame_id = "camera_frame";
-      msg->format = "jpeg";
-      msg->data = buffer;
-
-      // Publish the compressed image
-      image_publisher_->publish(std::move(msg));
+      image_publisher_->publish(*msg);
 
     } catch (const std::exception &e) {
       RCLCPP_WARN(this->get_logger(), "Failed to publish result image: %s",
@@ -583,7 +591,7 @@ private:
     }
   }
 
-  void draw_detections_on_image(cv::Mat &image, 
+  void draw_detections_on_image(cv::Mat &image,
                                 const std::vector<cv::Rect> &boxes,
                                 const std::vector<float> &confidences,
                                 const std::vector<int> &class_ids,
@@ -598,14 +606,15 @@ private:
 
       // Draw label
       std::string class_name = getClassName(class_id);
-      std::string label = class_name + ": " + 
-                         std::to_string(static_cast<int>(confidence * 100)) + "%";
+      std::string label = class_name + ": " +
+                          std::to_string(static_cast<int>(confidence * 100)) +
+                          "%";
 
       int baseline;
-      cv::Size label_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
+      cv::Size label_size =
+          cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
 
-      cv::rectangle(image,
-                    cv::Point(box.x, box.y - label_size.height - 10),
+      cv::rectangle(image, cv::Point(box.x, box.y - label_size.height - 10),
                     cv::Point(box.x + label_size.width, box.y),
                     cv::Scalar(0, 255, 0), -1);
 
@@ -615,15 +624,17 @@ private:
   }
 
   void publish_detections_from_vectors(const std::vector<cv::Rect> &boxes,
-                                      const std::vector<float> &confidences,
-                                      const std::vector<int> &class_ids,
-                                      const rclcpp::Time &timestamp,
-                                      const std::string &frame_id) {
+                                       const std::vector<float> &confidences,
+                                       const std::vector<int> &class_ids,
+                                       const rclcpp::Time &timestamp,
+                                       const std::string &frame_id) {
     try {
       // Create Detection2DArray message
-      auto detection_msg = std::make_unique<vision_msgs::msg::Detection2DArray>();
+      auto detection_msg =
+          std::make_unique<vision_msgs::msg::Detection2DArray>();
       detection_msg->header.stamp = timestamp;
-      detection_msg->header.frame_id = frame_id.empty() ? "camera_frame" : frame_id;
+      detection_msg->header.frame_id =
+          frame_id.empty() ? "camera_frame" : frame_id;
 
       // Add detections
       for (size_t i = 0; i < boxes.size(); ++i) {
@@ -649,7 +660,8 @@ private:
       detection_publisher_->publish(std::move(detection_msg));
 
     } catch (const std::exception &e) {
-      RCLCPP_WARN(this->get_logger(), "Failed to publish detections: %s", e.what());
+      RCLCPP_WARN(this->get_logger(), "Failed to publish detections: %s",
+                  e.what());
     }
   }
 
@@ -812,8 +824,7 @@ private:
   }
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subscription_;
-  rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr
-      image_publisher_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_publisher_;
   rclcpp::Publisher<vision_msgs::msg::Detection2DArray>::SharedPtr
       detection_publisher_;
 

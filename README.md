@@ -331,7 +331,7 @@ def generate_launch_description():
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `input_topic` | string | `"/image_raw"` | Input image topic name |
-| `output_topic` | string | `"/object_detection"` | Output topic base name (generates `/detections` and `/image/compressed`) |
+| `output_topic` | string | `"/object_detection"` | Output topic base name (generates `/detections` and `/image`) |
 
 ### NCNN Backend Parameters
 
@@ -357,14 +357,14 @@ def generate_launch_description():
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `input_topic` | string | `"/image_raw"` | Input image topic name |
-| `output_topic` | string | `"/object_detection"` | Output topic base name (generates `/detections` and `/image/compressed`) |
+| `output_topic` | string | `"/object_detection"` | Output topic base name (generates `/detections` and `/image`) |
 
 **Note**: 
 - **Input Size Handling**: 
   - ONNX version: Automatically detected from model metadata
   - NCNN version: Configured via `input_size` parameter
 - Output images are published only when there are subscribers to the output topic.
-- Images are compressed to JPEG format (quality 80%) to reduce bandwidth usage.
+- Images are published in raw format for better compatibility with image viewers.
 - **Class Filtering**: `target_classes` parameter filters Detection2DArray results but debug images always show all detected objects.
 
 ## Topics
@@ -373,7 +373,7 @@ def generate_launch_description():
 - `{input_topic}` (`sensor_msgs/Image`): Input camera images
 
 ### Published Topics
-- `{output_topic}/image/compressed` (`sensor_msgs/CompressedImage`): Detection result images with bounding boxes (JPEG compressed)
+- `{output_topic}/image` (`sensor_msgs/Image`): Detection result images with bounding boxes
 - `{output_topic}/detections` (`vision_msgs/Detection2DArray`): Object detection results with bounding boxes, class IDs, and confidence scores (filtered by `target_classes`)
 
 ## Class Filtering
@@ -546,7 +546,7 @@ colcon test --packages-select etrobo_object_detection
      --ros-args -p input_topic:=/camera/image_raw
    
    # View detection results
-   ros2 run rqt_image_view rqt_image_view /object_detection/image/compressed
+   ros2 run image_view image_view --ros-args -r image:=/object_detection/image
    
    # View detection data
    ros2 topic echo /object_detection/detections
