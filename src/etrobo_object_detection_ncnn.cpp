@@ -406,6 +406,7 @@ private:
     strides[2] = 32;
     const int max_stride = 32;
 
+    // Calculate target dimensions
     int w = img_w;
     int h = img_h;
     float scale = 1.f;
@@ -419,15 +420,30 @@ private:
       w = w * scale;
     }
 
-    ncnn::Mat in = ncnn::Mat::from_pixels_resize(
-        bgr.data, ncnn::Mat::PIXEL_BGR2RGB, img_w, img_h, w, h);
-
+    // Calculate padding
     int wpad = (w + max_stride - 1) / max_stride * max_stride - w;
     int hpad = (h + max_stride - 1) / max_stride * max_stride - h;
-    ncnn::Mat in_pad;
-    ncnn::copy_make_border(in, in_pad, hpad / 2, hpad - hpad / 2, wpad / 2,
-                           wpad - wpad / 2, ncnn::BORDER_CONSTANT, 114.f);
+    int final_w = w + wpad;
+    int final_h = h + hpad;
 
+    // Optimized preprocessing: resize with padding
+    ncnn::Mat in = ncnn::Mat::from_pixels_resize(
+        bgr.data, ncnn::Mat::PIXEL_BGR2RGB, img_w, img_h, final_w, final_h);
+
+    // Apply center padding if needed (letterbox effect)
+    ncnn::Mat in_pad;
+    if (wpad > 0 || hpad > 0) {
+      // Create a resized image first, then add padding
+      ncnn::Mat resized = ncnn::Mat::from_pixels_resize(
+          bgr.data, ncnn::Mat::PIXEL_BGR2RGB, img_w, img_h, w, h);
+      ncnn::copy_make_border(resized, in_pad, hpad / 2, hpad - hpad / 2,
+                             wpad / 2, wpad - wpad / 2, ncnn::BORDER_CONSTANT,
+                             114.f);
+    } else {
+      in_pad = in;
+    }
+
+    // Optimization 3: Normalization
     const float norm_vals[3] = {1 / 255.f, 1 / 255.f, 1 / 255.f};
     in_pad.substract_mean_normalize(0, norm_vals);
 
@@ -547,6 +563,62 @@ private:
                 input_size_);
   }
 
+  cv::Mat perform_detection(const cv::Mat &image, bool draw_results = true) {
+    auto total_start = std::chrono::steady_clock::now();
+    auto preprocess_start = std::chrono::steady_clock::now();
+
+    auto preprocess_end = std::chrono::steady_clock::now();
+    auto inference_start = std::chrono::steady_clock::now();
+
+    // Single detection run without class filtering to get all objects
+    std::vector<Object> all_objects;
+    detect_yolov8(image, all_objects, false); // apply_class_filter = false
+
+    auto inference_end = std::chrono::steady_clock::now();
+    auto postprocess_start = std::chrono::steady_clock::now();
+
+    // Filter objects for Detection2DArray output
+    std::vector<Object> filtered_objects;
+    for (const auto &obj : all_objects) {
+      if (target_classes_.empty() || target_classes_.count(obj.label) > 0) {
+        filtered_objects.push_back(obj);
+      }
+    }
+
+    DetectionResults detection_results =
+        process_detection_results(filtered_objects);
+
+    cv::Mat result;
+    if (draw_results) {
+      result = image.clone();
+      draw_detection_results(result, all_objects); // Draw all objects
+    }
+
+    auto postprocess_end = std::chrono::steady_clock::now();
+    auto total_end = std::chrono::steady_clock::now();
+
+    auto preprocess_ms = std::chrono::duration<double, std::milli>(
+                             preprocess_end - preprocess_start)
+                             .count();
+    auto inference_ms = std::chrono::duration<double, std::milli>(
+                            inference_end - inference_start)
+                            .count();
+    auto postprocess_ms = std::chrono::duration<double, std::milli>(
+                              postprocess_end - postprocess_start)
+                              .count();
+    auto total_ms =
+        std::chrono::duration<double, std::milli>(total_end - total_start)
+            .count();
+
+    log_detection_results(detection_results, image.cols, image.rows, total_ms,
+                          preprocess_ms, inference_ms, postprocess_ms);
+
+    // Publish detection results (filtered objects only)
+    publish_detections(filtered_objects, input_timestamp_, input_frame_id_);
+
+    return result;
+  }
+
   void image_callback(const sensor_msgs::msg::Image::SharedPtr msg) {
     try {
       // Store input timestamp and frame_id for detection results
@@ -579,64 +651,6 @@ private:
     } catch (cv_bridge::Exception &e) {
       RCLCPP_WARN(this->get_logger(), "cv_bridge exception: %s", e.what());
     }
-  }
-
-  cv::Mat perform_detection(const cv::Mat &image, bool draw_results = true) {
-    cv::Mat result;
-    if (draw_results) {
-      result = image.clone();
-    }
-
-    auto total_start = std::chrono::steady_clock::now();
-    auto preprocess_start = std::chrono::steady_clock::now();
-
-    auto preprocess_end = std::chrono::steady_clock::now();
-    auto inference_start = std::chrono::steady_clock::now();
-
-    // Single detection run without class filtering to get all objects
-    std::vector<Object> all_objects;
-    detect_yolov8(image, all_objects, false); // apply_class_filter = false
-
-    auto inference_end = std::chrono::steady_clock::now();
-    auto postprocess_start = std::chrono::steady_clock::now();
-
-    // Filter objects for Detection2DArray output
-    std::vector<Object> filtered_objects;
-    for (const auto &obj : all_objects) {
-      if (target_classes_.empty() || target_classes_.count(obj.label) > 0) {
-        filtered_objects.push_back(obj);
-      }
-    }
-
-    DetectionResults detection_results =
-        process_detection_results(filtered_objects);
-    if (draw_results) {
-      draw_detection_results(result, all_objects); // Draw all objects
-    }
-
-    auto postprocess_end = std::chrono::steady_clock::now();
-    auto total_end = std::chrono::steady_clock::now();
-
-    auto preprocess_ms = std::chrono::duration<double, std::milli>(
-                             preprocess_end - preprocess_start)
-                             .count();
-    auto inference_ms = std::chrono::duration<double, std::milli>(
-                            inference_end - inference_start)
-                            .count();
-    auto postprocess_ms = std::chrono::duration<double, std::milli>(
-                              postprocess_end - postprocess_start)
-                              .count();
-    auto total_ms =
-        std::chrono::duration<double, std::milli>(total_end - total_start)
-            .count();
-
-    log_detection_results(detection_results, image.cols, image.rows, total_ms,
-                          preprocess_ms, inference_ms, postprocess_ms);
-
-    // Publish detection results (filtered objects only)
-    publish_detections(filtered_objects, input_timestamp_, input_frame_id_);
-
-    return result;
   }
 
   void publish_result_image(const cv::Mat &image) {
