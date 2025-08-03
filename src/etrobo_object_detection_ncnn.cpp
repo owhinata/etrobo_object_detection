@@ -24,6 +24,15 @@ struct Object {
   float prob;
 };
 
+struct PreprocessResult {
+  ncnn::Mat input_tensor;
+  float scale;
+  int wpad;
+  int hpad;
+  int original_width;
+  int original_height;
+};
+
 class ObjectDetectionNCNNNode : public rclcpp::Node {
 private:
   // YOLO model constants
@@ -69,6 +78,110 @@ private:
       draw_detection_results(result, all_objects);
     }
     return result;
+  }
+
+  // Preprocess image for YOLO inference
+  PreprocessResult preprocess_image(const cv::Mat &bgr) {
+    PreprocessResult result;
+    result.original_width = bgr.cols;
+    result.original_height = bgr.rows;
+
+    const int target_size = input_size_;
+    int img_w = bgr.cols;
+    int img_h = bgr.rows;
+
+    // Calculate target dimensions
+    int w = img_w;
+    int h = img_h;
+    if (w > h) {
+      result.scale = (float)target_size / w;
+      w = target_size;
+      h = h * result.scale;
+    } else {
+      result.scale = (float)target_size / h;
+      h = target_size;
+      w = w * result.scale;
+    }
+
+    // Calculate padding
+    result.wpad = (w + MAX_STRIDE - 1) / MAX_STRIDE * MAX_STRIDE - w;
+    result.hpad = (h + MAX_STRIDE - 1) / MAX_STRIDE * MAX_STRIDE - h;
+    int final_w = w + result.wpad;
+    int final_h = h + result.hpad;
+
+    // Apply center padding if needed (letterbox effect)
+    if (result.wpad > 0 || result.hpad > 0) {
+      // Create a resized image first, then add padding
+      ncnn::Mat resized = ncnn::Mat::from_pixels_resize(
+          bgr.data, ncnn::Mat::PIXEL_BGR2RGB, img_w, img_h, w, h);
+      ncnn::copy_make_border(resized, result.input_tensor, result.hpad / 2,
+                             result.hpad - result.hpad / 2, result.wpad / 2,
+                             result.wpad - result.wpad / 2,
+                             ncnn::BORDER_CONSTANT, PADDING_VALUE);
+    } else {
+      result.input_tensor = ncnn::Mat::from_pixels_resize(
+          bgr.data, ncnn::Mat::PIXEL_BGR2RGB, img_w, img_h, final_w, final_h);
+    }
+
+    // Normalization
+    const float norm_vals[3] = {NORMALIZATION_FACTOR, NORMALIZATION_FACTOR,
+                                NORMALIZATION_FACTOR};
+    result.input_tensor.substract_mean_normalize(0, norm_vals);
+
+    return result;
+  }
+
+  // Run NCNN inference
+  ncnn::Mat run_inference(const ncnn::Mat &input_tensor) {
+    ncnn::Extractor ex = net_->create_extractor();
+    ex.input("in0", input_tensor);
+
+    ncnn::Mat output;
+    ex.extract("out0", output);
+    return output;
+  }
+
+  // Apply NMS and coordinate transformation
+  void apply_nms_and_transform(std::vector<Object> &proposals,
+                               const PreprocessResult &preprocess_result,
+                               std::vector<Object> &objects) {
+    qsort_descent_inplace(proposals);
+
+    std::vector<int> picked;
+    nms_sorted_bboxes(proposals, picked, nms_threshold_);
+
+    int count = picked.size();
+    objects.resize(count);
+
+    for (int i = 0; i < count; i++) {
+      objects[i] = proposals[picked[i]];
+
+      // Transform coordinates back to original image space
+      float x0 = (objects[i].rect.x - (preprocess_result.wpad / 2)) /
+                 preprocess_result.scale;
+      float y0 = (objects[i].rect.y - (preprocess_result.hpad / 2)) /
+                 preprocess_result.scale;
+      float x1 = (objects[i].rect.x + objects[i].rect.width -
+                  (preprocess_result.wpad / 2)) /
+                 preprocess_result.scale;
+      float y1 = (objects[i].rect.y + objects[i].rect.height -
+                  (preprocess_result.hpad / 2)) /
+                 preprocess_result.scale;
+
+      x0 = clamp_to_image_bounds(
+          x0, static_cast<float>(preprocess_result.original_width));
+      y0 = clamp_to_image_bounds(
+          y0, static_cast<float>(preprocess_result.original_height));
+      x1 = clamp_to_image_bounds(
+          x1, static_cast<float>(preprocess_result.original_width));
+      y1 = clamp_to_image_bounds(
+          y1, static_cast<float>(preprocess_result.original_height));
+
+      objects[i].rect.x = x0;
+      objects[i].rect.y = y0;
+      objects[i].rect.width = x1 - x0;
+      objects[i].rect.height = y1 - y0;
+    }
   }
 
 public:
@@ -348,92 +461,112 @@ private:
 
   static inline float sigmoid(float x) { return 1.0f / (1.0f + expf(-x)); }
 
+  // Calculate class score and label for a grid prediction
+  std::pair<int, float> calculate_class_score(const ncnn::Mat &pred_grid,
+                                              int num_class) {
+    const ncnn::Mat pred_score = pred_grid.range(REG_MAX * 4, num_class);
+
+    int label = -1;
+    float score = -FLT_MAX;
+
+    for (int k = 0; k < num_class; k++) {
+      float class_score = pred_score[k];
+      if (class_score > score) {
+        label = k;
+        score = class_score;
+      }
+    }
+
+    return std::make_pair(label, sigmoid(score));
+  }
+
+  // Calculate bounding box coordinates from prediction
+  void calculate_bbox_coordinates(const ncnn::Mat &pred_grid, int stride,
+                                  int grid_x, int grid_y,
+                                  float bbox_coords[4]) {
+    ncnn::Mat pred_bbox = pred_grid.range(0, REG_MAX * 4).reshape(REG_MAX, 4);
+
+    // Apply softmax to regression values
+    ncnn::Layer *softmax = ncnn::create_layer("Softmax");
+    ncnn::ParamDict pd;
+    pd.set(0, 1);
+    pd.set(1, 1);
+    softmax->load_param(pd);
+
+    ncnn::Option opt;
+    opt.num_threads = 1;
+    opt.use_packing_layout = false;
+
+    softmax->create_pipeline(opt);
+    softmax->forward_inplace(pred_bbox, opt);
+    softmax->destroy_pipeline(opt);
+    delete softmax;
+
+    // Calculate distance values
+    float pred_ltrb[4];
+    for (int k = 0; k < 4; k++) {
+      float dis = 0.f;
+      const float *dis_after_sm = pred_bbox.row(k);
+      for (int l = 0; l < REG_MAX; l++) {
+        dis += l * dis_after_sm[l];
+      }
+      pred_ltrb[k] = dis * stride;
+    }
+
+    // Calculate center point and final coordinates
+    float pb_cx = (grid_x + 0.5f) * stride;
+    float pb_cy = (grid_y + 0.5f) * stride;
+
+    bbox_coords[0] = pb_cx - pred_ltrb[0]; // x0
+    bbox_coords[1] = pb_cy - pred_ltrb[1]; // y0
+    bbox_coords[2] = pb_cx + pred_ltrb[2]; // x1
+    bbox_coords[3] = pb_cy + pred_ltrb[3]; // y1
+  }
+
   void generate_proposals(const ncnn::Mat &pred, int stride,
                           const ncnn::Mat &in_pad, float prob_threshold,
                           std::vector<Object> &objects,
                           bool apply_class_filter = true) {
     const int w = in_pad.w;
     const int h = in_pad.h;
-
     const int num_grid_x = w / stride;
     const int num_grid_y = h / stride;
-
     const int num_class = pred.w - REG_MAX * 4;
 
     for (int y = 0; y < num_grid_y; y++) {
       for (int x = 0; x < num_grid_x; x++) {
         const ncnn::Mat pred_grid = pred.row_range(y * num_grid_x + x, 1);
 
-        int label = -1;
-        float score = -FLT_MAX;
-        {
-          const ncnn::Mat pred_score = pred_grid.range(REG_MAX * 4, num_class);
+        // Calculate class score and label
+        auto class_result = calculate_class_score(pred_grid, num_class);
+        int label = class_result.first;
+        float score = class_result.second;
 
-          for (int k = 0; k < num_class; k++) {
-            float class_score = pred_score[k];
-            if (class_score > score) {
-              label = k;
-              score = class_score;
-            }
-          }
-
-          score = sigmoid(score);
+        // Skip if score is below threshold
+        if (score < prob_threshold) {
+          continue;
         }
 
-        if (score >= prob_threshold) {
-          ncnn::Mat pred_bbox =
-              pred_grid.range(0, REG_MAX * 4).reshape(REG_MAX, 4);
-
-          {
-            ncnn::Layer *softmax = ncnn::create_layer("Softmax");
-            ncnn::ParamDict pd;
-            pd.set(0, 1);
-            pd.set(1, 1);
-            softmax->load_param(pd);
-
-            ncnn::Option opt;
-            opt.num_threads = 1;
-            opt.use_packing_layout = false;
-
-            softmax->create_pipeline(opt);
-            softmax->forward_inplace(pred_bbox, opt);
-            softmax->destroy_pipeline(opt);
-
-            delete softmax;
-          }
-
-          float pred_ltrb[4];
-          for (int k = 0; k < 4; k++) {
-            float dis = 0.f;
-            const float *dis_after_sm = pred_bbox.row(k);
-            for (int l = 0; l < REG_MAX; l++) {
-              dis += l * dis_after_sm[l];
-            }
-            pred_ltrb[k] = dis * stride;
-          }
-
-          float pb_cx = (x + 0.5f) * stride;
-          float pb_cy = (y + 0.5f) * stride;
-
-          float x0 = pb_cx - pred_ltrb[0];
-          float y0 = pb_cy - pred_ltrb[1];
-          float x1 = pb_cx + pred_ltrb[2];
-          float y1 = pb_cy + pred_ltrb[3];
-
-          // Filter by target classes (only if apply_class_filter is true)
-          if (!apply_class_filter || target_classes_.empty() ||
-              target_classes_.count(label) > 0) {
-            Object obj;
-            obj.rect.x = x0;
-            obj.rect.y = y0;
-            obj.rect.width = x1 - x0;
-            obj.rect.height = y1 - y0;
-            obj.label = label;
-            obj.prob = score;
-
-            objects.push_back(obj);
-          }
+        // Skip if class filtering is enabled and class is not in target list
+        if (apply_class_filter && !target_classes_.empty() &&
+            target_classes_.count(label) == 0) {
+          continue;
         }
+
+        // Calculate bounding box coordinates
+        float bbox_coords[4];
+        calculate_bbox_coordinates(pred_grid, stride, x, y, bbox_coords);
+
+        // Create object and add to results
+        Object obj;
+        obj.rect.x = bbox_coords[0];
+        obj.rect.y = bbox_coords[1];
+        obj.rect.width = bbox_coords[2] - bbox_coords[0];
+        obj.rect.height = bbox_coords[3] - bbox_coords[1];
+        obj.label = label;
+        obj.prob = score;
+
+        objects.push_back(obj);
       }
     }
   }
@@ -462,95 +595,20 @@ private:
 
   int detect_yolov8(const cv::Mat &bgr, std::vector<Object> &objects,
                     bool apply_class_filter = true) {
-    const int target_size = input_size_;
-    const float prob_threshold = confidence_threshold_;
-    const float nms_threshold = nms_threshold_;
+    // Step 1: Preprocess image
+    PreprocessResult preprocess_result = preprocess_image(bgr);
 
-    int img_w = bgr.cols;
-    int img_h = bgr.rows;
+    // Step 2: Run inference
+    ncnn::Mat output = run_inference(preprocess_result.input_tensor);
 
+    // Step 3: Generate proposals
     std::vector<int> strides = {STRIDE_8, STRIDE_16, STRIDE_32};
-
-    // Calculate target dimensions
-    int w = img_w;
-    int h = img_h;
-    float scale = 1.f;
-    if (w > h) {
-      scale = (float)target_size / w;
-      w = target_size;
-      h = h * scale;
-    } else {
-      scale = (float)target_size / h;
-      h = target_size;
-      w = w * scale;
-    }
-
-    // Calculate padding
-    int wpad = (w + MAX_STRIDE - 1) / MAX_STRIDE * MAX_STRIDE - w;
-    int hpad = (h + MAX_STRIDE - 1) / MAX_STRIDE * MAX_STRIDE - h;
-    int final_w = w + wpad;
-    int final_h = h + hpad;
-
-    // Optimized preprocessing: resize with padding
-    ncnn::Mat in = ncnn::Mat::from_pixels_resize(
-        bgr.data, ncnn::Mat::PIXEL_BGR2RGB, img_w, img_h, final_w, final_h);
-
-    // Apply center padding if needed (letterbox effect)
-    ncnn::Mat in_pad;
-    if (wpad > 0 || hpad > 0) {
-      // Create a resized image first, then add padding
-      ncnn::Mat resized = ncnn::Mat::from_pixels_resize(
-          bgr.data, ncnn::Mat::PIXEL_BGR2RGB, img_w, img_h, w, h);
-      ncnn::copy_make_border(resized, in_pad, hpad / 2, hpad - hpad / 2,
-                             wpad / 2, wpad - wpad / 2, ncnn::BORDER_CONSTANT,
-                             PADDING_VALUE);
-    } else {
-      in_pad = in;
-    }
-
-    // Optimization 3: Normalization
-    const float norm_vals[3] = {NORMALIZATION_FACTOR, NORMALIZATION_FACTOR,
-                                NORMALIZATION_FACTOR};
-    in_pad.substract_mean_normalize(0, norm_vals);
-
-    ncnn::Extractor ex = net_->create_extractor();
-    ex.input("in0", in_pad);
-
-    ncnn::Mat out;
-    ex.extract("out0", out);
-
     std::vector<Object> proposals;
-    generate_proposals(out, strides, in_pad, prob_threshold, proposals,
-                       apply_class_filter);
+    generate_proposals(output, strides, preprocess_result.input_tensor,
+                       confidence_threshold_, proposals, apply_class_filter);
 
-    qsort_descent_inplace(proposals);
-
-    std::vector<int> picked;
-    nms_sorted_bboxes(proposals, picked, nms_threshold);
-
-    int count = picked.size();
-    objects.resize(count);
-
-    for (int i = 0; i < count; i++) {
-      objects[i] = proposals[picked[i]];
-
-      float x0 = (objects[i].rect.x - (wpad / 2)) / scale;
-      float y0 = (objects[i].rect.y - (hpad / 2)) / scale;
-      float x1 =
-          (objects[i].rect.x + objects[i].rect.width - (wpad / 2)) / scale;
-      float y1 =
-          (objects[i].rect.y + objects[i].rect.height - (hpad / 2)) / scale;
-
-      x0 = clamp_to_image_bounds(x0, static_cast<float>(img_w));
-      y0 = clamp_to_image_bounds(y0, static_cast<float>(img_h));
-      x1 = clamp_to_image_bounds(x1, static_cast<float>(img_w));
-      y1 = clamp_to_image_bounds(y1, static_cast<float>(img_h));
-
-      objects[i].rect.x = x0;
-      objects[i].rect.y = y0;
-      objects[i].rect.width = x1 - x0;
-      objects[i].rect.height = y1 - y0;
-    }
+    // Step 4: Apply NMS and coordinate transformation
+    apply_nms_and_transform(proposals, preprocess_result, objects);
 
     return 0;
   }
@@ -629,30 +687,46 @@ private:
                 input_size_);
   }
 
+  // Core detection pipeline without timing measurements
+  struct DetectionPipelineResult {
+    std::vector<Object> all_objects;
+    std::vector<Object> filtered_objects;
+    DetectionResults detection_results;
+  };
+
+  DetectionPipelineResult run_detection_pipeline(const cv::Mat &image) {
+    DetectionPipelineResult result;
+
+    // Run detection without class filtering to get all objects
+    detect_yolov8(image, result.all_objects, false);
+
+    // Filter objects by target classes
+    result.filtered_objects =
+        filter_objects_by_target_classes(result.all_objects);
+
+    // Process detection results for logging
+    result.detection_results =
+        process_detection_results(result.filtered_objects);
+
+    return result;
+  }
+
   cv::Mat perform_detection(const cv::Mat &image, bool draw_results = true) {
     auto total_start = std::chrono::steady_clock::now();
     auto preprocess_start = std::chrono::steady_clock::now();
-
     auto preprocess_end = std::chrono::steady_clock::now();
+
     auto inference_start = std::chrono::steady_clock::now();
-
-    // Single detection run without class filtering to get all objects
-    std::vector<Object> all_objects;
-    detect_yolov8(image, all_objects, false); // apply_class_filter = false
-
+    // Run core detection pipeline
+    DetectionPipelineResult pipeline_result = run_detection_pipeline(image);
     auto inference_end = std::chrono::steady_clock::now();
+
     auto postprocess_start = std::chrono::steady_clock::now();
-
-    // Filter objects and process results
-    std::vector<Object> filtered_objects =
-        filter_objects_by_target_classes(all_objects);
-    DetectionResults detection_results =
-        process_detection_results(filtered_objects);
-
     // Draw results if needed
-    cv::Mat result = draw_results_if_needed(image, all_objects, draw_results);
-
+    cv::Mat result = draw_results_if_needed(image, pipeline_result.all_objects,
+                                            draw_results);
     auto postprocess_end = std::chrono::steady_clock::now();
+
     auto total_end = std::chrono::steady_clock::now();
 
     // Calculate and log timing
@@ -663,18 +737,20 @@ private:
         calculate_duration_ms(postprocess_start, postprocess_end);
     auto total_ms = calculate_duration_ms(total_start, total_end);
 
-    log_detection_results(detection_results, image.cols, image.rows, total_ms,
-                          preprocess_ms, inference_ms, postprocess_ms);
+    log_detection_results(pipeline_result.detection_results, image.cols,
+                          image.rows, total_ms, preprocess_ms, inference_ms,
+                          postprocess_ms);
 
     // Publish detection results (filtered objects only)
-    publish_detections(filtered_objects, input_timestamp_, input_frame_id_);
+    publish_detections(pipeline_result.filtered_objects, input_timestamp_,
+                       input_frame_id_);
 
     return result;
   }
 
   void image_callback(const sensor_msgs::msg::Image::SharedPtr msg) {
     try {
-      // Store input timestamp and frame_id for detection results
+      // Store input metadata for detection results
       input_timestamp_ = msg->header.stamp;
       input_frame_id_ = msg->header.frame_id;
 
@@ -684,25 +760,39 @@ private:
                    input_timestamp_.seconds(), input_timestamp_.nanoseconds(),
                    input_frame_id_.c_str());
 
-      cv_bridge::CvImagePtr cv_ptr =
-          cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
-      cv::Mat img = cv_ptr->image;
-
+      // Check if model is loaded
       if (!net_) {
         RCLCPP_WARN(this->get_logger(), "Model not loaded, skipping detection");
         return;
       }
 
-      if (image_publisher_->get_subscription_count() > 0) {
-        cv::Mat result_img = perform_detection(img, true);
-        publish_result_image(result_img);
-      } else {
-        // Perform detection without drawing (for logging purposes)
-        perform_detection(img, false);
-      }
+      // Convert ROS image to OpenCV format
+      cv::Mat image = convert_ros_image_to_cv(msg);
+
+      // Process detection and publish results
+      process_detection_with_publishing(image);
 
     } catch (cv_bridge::Exception &e) {
       RCLCPP_WARN(this->get_logger(), "cv_bridge exception: %s", e.what());
+    }
+  }
+
+  // Convert ROS image message to OpenCV Mat
+  cv::Mat
+  convert_ros_image_to_cv(const sensor_msgs::msg::Image::SharedPtr msg) {
+    cv_bridge::CvImagePtr cv_ptr =
+        cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
+    return cv_ptr->image;
+  }
+
+  // Process detection based on subscriber count
+  void process_detection_with_publishing(const cv::Mat &image) {
+    if (image_publisher_->get_subscription_count() > 0) {
+      cv::Mat result_img = perform_detection(image, true);
+      publish_result_image(result_img);
+    } else {
+      // Perform detection without drawing (for logging purposes)
+      perform_detection(image, false);
     }
   }
 
