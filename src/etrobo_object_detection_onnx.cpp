@@ -90,7 +90,7 @@ private:
     this->declare_parameter("model_path", "yolov8n.onnx");
 
     // Inference parameters
-    this->declare_parameter("confidence_threshold", 0.5);
+    this->declare_parameter("confidence_threshold", 0.25);
     this->declare_parameter("nms_threshold", 0.4);
     this->declare_parameter("target_classes",
                             std::vector<int64_t>{}); // all objects

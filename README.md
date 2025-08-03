@@ -236,7 +236,7 @@ etrobo_object_detection:
     model_path: "/path/to/yolov8n.onnx"
     
     # Inference parameters
-    confidence_threshold: 0.5
+    confidence_threshold: 0.25
     nms_threshold: 0.4
     target_classes: []  # All objects (default)
     
@@ -258,7 +258,7 @@ object_detection_ncnn:
     input_size: 320
     
     # Inference parameters
-    confidence_threshold: 0.5
+    confidence_threshold: 0.25
     nms_threshold: 0.4
     target_classes: []  # All objects (default)
     
@@ -295,7 +295,7 @@ def generate_launch_description():
             name='object_detection_node',
             parameters=[{
                 'model_path': '/path/to/yolov8n.onnx',
-                'confidence_threshold': 0.5,
+                'confidence_threshold': 0.25,
                 'nms_threshold': 0.4,
                 'num_threads': 2,
                 'input_topic': '/camera/image_raw',
@@ -318,7 +318,7 @@ def generate_launch_description():
 #### Inference Parameters
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `confidence_threshold` | double | `0.5` | Minimum confidence score for detections |
+| `confidence_threshold` | double | `0.25` | Minimum confidence score for detections |
 | `nms_threshold` | double | `0.4` | Non-Maximum Suppression threshold |
 | `target_classes` | int[] | `[]` | COCO class IDs to detect. Empty array `[]` = detect all classes (default) |
 
@@ -344,7 +344,7 @@ def generate_launch_description():
 #### Inference Parameters
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `confidence_threshold` | double | `0.5` | Minimum confidence score for detections |
+| `confidence_threshold` | double | `0.25` | Minimum confidence score for detections |
 | `nms_threshold` | double | `0.4` | Non-Maximum Suppression threshold |
 | `target_classes` | int[] | `[]` | COCO class IDs to detect. Empty array `[]` = detect all classes (default) |
 
