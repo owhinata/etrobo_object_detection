@@ -798,9 +798,34 @@ private:
 
   void publish_result_image(const cv::Mat &image) {
     try {
+      // Check if image is valid before publishing
+      if (image.empty() || image.cols == 0 || image.rows == 0) {
+        RCLCPP_WARN(this->get_logger(),
+                    "Attempted to publish empty image, skipping");
+        return;
+      }
+
+      // Ensure image is in correct format
+      cv::Mat publish_image;
+      if (image.channels() == 3 && image.type() == CV_8UC3) {
+        publish_image = image;
+      } else {
+        RCLCPP_WARN(this->get_logger(),
+                    "Image format conversion needed: channels=%d, type=%d",
+                    image.channels(), image.type());
+        if (image.channels() == 1) {
+          cv::cvtColor(image, publish_image, cv::COLOR_GRAY2BGR);
+        } else if (image.channels() == 4) {
+          cv::cvtColor(image, publish_image, cv::COLOR_BGRA2BGR);
+        } else {
+          image.copyTo(publish_image);
+        }
+      }
+
       // Publish raw image only
-      auto msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", image)
-                     .toImageMsg();
+      auto msg =
+          cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", publish_image)
+              .toImageMsg();
       msg->header.stamp = this->get_clock()->now();
       msg->header.frame_id = "camera_frame";
       image_publisher_->publish(*msg);

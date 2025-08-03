@@ -16,6 +16,12 @@
 #include <vision_msgs/msg/detection2_d_array.hpp>
 #include <vision_msgs/msg/object_hypothesis_with_pose.hpp>
 
+struct ONNXPreprocessResult {
+  cv::Mat blob;
+  std::vector<int64_t> input_shape;
+  size_t input_tensor_size;
+};
+
 class ObjectDetectionNode : public rclcpp::Node {
 public:
   ObjectDetectionNode() : Node("object_detection") {
@@ -400,34 +406,151 @@ private:
     return {max_class_score, class_id};
   }
 
+  // Convert ROS image message to OpenCV Mat
+  cv::Mat
+  convert_ros_image_to_cv(const sensor_msgs::msg::Image::SharedPtr msg) {
+    cv_bridge::CvImagePtr cv_ptr =
+        cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
+    return cv_ptr->image;
+  }
+
+  // Process detection based on subscriber count
+  void process_detection_with_publishing(const cv::Mat &image) {
+    if (image_publisher_->get_subscription_count() > 0) {
+      cv::Mat result_img = perform_detection(image, true);
+      publish_result_image(result_img);
+    } else {
+      // Perform detection without drawing (for logging purposes)
+      perform_detection(image, false);
+    }
+  }
+
   void image_callback(const sensor_msgs::msg::Image::SharedPtr msg) {
     try {
-      // Store input timestamp and frame_id for detection results
+      // Store input metadata for detection results
       input_timestamp_ = msg->header.stamp;
       input_frame_id_ = msg->header.frame_id;
 
-      // Convert ROS image to OpenCV format
-      cv_bridge::CvImagePtr cv_ptr =
-          cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
-      cv::Mat img = cv_ptr->image;
-
+      // Check if model is loaded
       if (!session_) {
         RCLCPP_WARN(this->get_logger(), "Model not loaded, skipping detection");
         return;
       }
 
-      // Perform object detection and publish result if there are subscribers
-      if (image_publisher_->get_subscription_count() > 0) {
-        cv::Mat result_img = perform_detection(img, true);
-        publish_result_image(result_img);
-      } else {
-        // Perform detection without drawing (for logging purposes)
-        perform_detection(img, false);
-      }
+      // Convert ROS image to OpenCV format
+      cv::Mat image = convert_ros_image_to_cv(msg);
+
+      // Process detection and publish results
+      process_detection_with_publishing(image);
 
     } catch (cv_bridge::Exception &e) {
       RCLCPP_WARN(this->get_logger(), "cv_bridge exception: %s", e.what());
     }
+  }
+
+  // Preprocess image for ONNX inference
+  ONNXPreprocessResult preprocess_image_for_onnx(const cv::Mat &image) {
+    ONNXPreprocessResult result;
+
+    // Create blob from image with normalization
+    cv::dnn::blobFromImage(image, result.blob, 1.0 / 255.0,
+                           cv::Size(input_size_, input_size_),
+                           cv::Scalar(0, 0, 0), true, false);
+
+    // Prepare input tensor metadata
+    result.input_shape = {1, 3, input_size_, input_size_};
+    result.input_tensor_size = 1 * 3 * input_size_ * input_size_;
+
+    return result;
+  }
+
+  // Run ONNX inference
+  std::vector<Ort::Value>
+  run_onnx_inference(const ONNXPreprocessResult &preprocess_result) {
+    auto input_tensor = Ort::Value::CreateTensor<float>(
+        *memory_info_, (float *)preprocess_result.blob.data,
+        preprocess_result.input_tensor_size,
+        preprocess_result.input_shape.data(),
+        preprocess_result.input_shape.size());
+
+    return session_->Run(Ort::RunOptions{nullptr}, input_node_names_.data(),
+                         &input_tensor, 1, output_node_names_.data(), 1);
+  }
+
+  // Apply NMS and filter results by target classes
+  struct NMSFilterResult {
+    std::vector<cv::Rect> filtered_boxes;
+    std::vector<float> filtered_confidences;
+    std::vector<int> filtered_class_ids;
+    std::vector<cv::Rect> all_boxes;
+    std::vector<float> all_confidences;
+    std::vector<int> all_class_ids;
+    std::vector<int> nms_indices;
+  };
+
+  NMSFilterResult apply_nms_and_filter(float *output_data,
+                                       const std::vector<int64_t> &shape,
+                                       int image_width, int image_height) {
+    NMSFilterResult result;
+
+    // Extract all detections without class filtering
+    extract_detections(output_data, shape, confidence_threshold_, image_width,
+                       image_height, result.all_boxes, result.all_confidences,
+                       result.all_class_ids, false);
+
+    // Apply NMS to all detections
+    cv::dnn::NMSBoxes(result.all_boxes, result.all_confidences,
+                      confidence_threshold_, nms_threshold_,
+                      result.nms_indices);
+
+    // Filter results for publishing (target_classes only)
+    for (int idx : result.nms_indices) {
+      if (target_classes_.empty() ||
+          target_classes_.count(result.all_class_ids[idx]) > 0) {
+        result.filtered_boxes.push_back(result.all_boxes[idx]);
+        result.filtered_confidences.push_back(result.all_confidences[idx]);
+        result.filtered_class_ids.push_back(result.all_class_ids[idx]);
+      }
+    }
+
+    return result;
+  }
+
+  // Core detection pipeline without timing measurements
+  struct ONNXDetectionPipelineResult {
+    NMSFilterResult nms_result;
+    DetectionResults detection_results;
+  };
+
+  ONNXDetectionPipelineResult
+  run_onnx_detection_pipeline(const cv::Mat &image) {
+    ONNXDetectionPipelineResult result;
+
+    // Step 1: Preprocess image
+    ONNXPreprocessResult preprocess_result = preprocess_image_for_onnx(image);
+
+    // Step 2: Run inference
+    auto output_tensors = run_onnx_inference(preprocess_result);
+
+    // Step 3: Apply NMS and filter results
+    if (!output_tensors.empty()) {
+      auto &output_tensor = output_tensors[0];
+      auto tensor_info = output_tensor.GetTensorTypeAndShapeInfo();
+      auto shape = tensor_info.GetShape();
+      float *output_data = output_tensor.GetTensorMutableData<float>();
+
+      result.nms_result =
+          apply_nms_and_filter(output_data, shape, image.cols, image.rows);
+
+      // Process detection results for logging
+      result.detection_results.total_detections =
+          result.nms_result.filtered_boxes.size();
+      for (int class_id : result.nms_result.filtered_class_ids) {
+        result.detection_results.class_counts[class_id]++;
+      }
+    }
+
+    return result;
   }
 
   cv::Mat perform_detection(const cv::Mat &image, bool draw_results = true) {
@@ -436,87 +559,33 @@ private:
     // Timing measurements
     auto total_start = std::chrono::steady_clock::now();
     auto preprocess_start = std::chrono::steady_clock::now();
+    auto preprocess_end = std::chrono::steady_clock::now();
+
+    auto inference_start = std::chrono::steady_clock::now();
 
     try {
-      // Preprocess image
-      cv::Mat blob;
-      cv::dnn::blobFromImage(image, blob, 1.0 / 255.0,
-                             cv::Size(input_size_, input_size_),
-                             cv::Scalar(0, 0, 0), true, false);
-
-      // Prepare input tensor
-      std::vector<int64_t> input_shape = {1, 3, input_size_, input_size_};
-      size_t input_tensor_size = 1 * 3 * input_size_ * input_size_;
-
-      auto input_tensor = Ort::Value::CreateTensor<float>(
-          *memory_info_, (float *)blob.data, input_tensor_size,
-          input_shape.data(), input_shape.size());
-
-      auto preprocess_end = std::chrono::steady_clock::now();
-      auto inference_start = std::chrono::steady_clock::now();
-
-      // Run inference
-      auto output_tensors =
-          session_->Run(Ort::RunOptions{nullptr}, input_node_names_.data(),
-                        &input_tensor, 1, output_node_names_.data(), 1);
+      // Run core detection pipeline
+      ONNXDetectionPipelineResult pipeline_result =
+          run_onnx_detection_pipeline(image);
 
       auto inference_end = std::chrono::steady_clock::now();
       auto postprocess_start = std::chrono::steady_clock::now();
 
-      // Single unified processing: extract all detections once
-      DetectionResults detection_results;
-
-      if (!output_tensors.empty()) {
-        auto &output_tensor = output_tensors[0];
-        auto tensor_info = output_tensor.GetTensorTypeAndShapeInfo();
-        auto shape = tensor_info.GetShape();
-        float *output_data = output_tensor.GetTensorMutableData<float>();
-
-        // Extract all detections without class filtering
-        std::vector<cv::Rect> all_boxes;
-        std::vector<float> all_confidences;
-        std::vector<int> all_class_ids;
-        extract_detections(output_data, shape, confidence_threshold_,
-                           image.cols, image.rows, all_boxes, all_confidences,
-                           all_class_ids,
-                           false); // apply_class_filter = false
-
-        // Apply NMS to all detections
-        std::vector<int> nms_indices;
-        cv::dnn::NMSBoxes(all_boxes, all_confidences, confidence_threshold_,
-                          nms_threshold_, nms_indices);
-
-        // Filter results for publishing (target_classes only)
-        std::vector<cv::Rect> filtered_boxes;
-        std::vector<float> filtered_confidences;
-        std::vector<int> filtered_class_ids;
-        for (int idx : nms_indices) {
-          if (target_classes_.empty() ||
-              target_classes_.count(all_class_ids[idx]) > 0) {
-            filtered_boxes.push_back(all_boxes[idx]);
-            filtered_confidences.push_back(all_confidences[idx]);
-            filtered_class_ids.push_back(all_class_ids[idx]);
-          }
-        }
-
-        // Process detection results for logging
-        detection_results.total_detections = filtered_boxes.size();
-        for (int class_id : filtered_class_ids) {
-          detection_results.class_counts[class_id]++;
-        }
-
-        // Draw results only when needed (delayed image cloning)
-        if (draw_results) {
-          result = image.clone();
-          draw_detections_on_image(result, all_boxes, all_confidences,
-                                   all_class_ids, nms_indices);
-        }
-
-        // Publish filtered detection results
-        publish_detections_from_vectors(filtered_boxes, filtered_confidences,
-                                        filtered_class_ids, input_timestamp_,
-                                        input_frame_id_);
+      // Draw results only when needed (delayed image cloning)
+      if (draw_results && !pipeline_result.nms_result.all_boxes.empty()) {
+        result = image.clone();
+        draw_detections_on_image(result, pipeline_result.nms_result.all_boxes,
+                                 pipeline_result.nms_result.all_confidences,
+                                 pipeline_result.nms_result.all_class_ids,
+                                 pipeline_result.nms_result.nms_indices);
       }
+
+      // Publish filtered detection results
+      publish_detections_from_vectors(
+          pipeline_result.nms_result.filtered_boxes,
+          pipeline_result.nms_result.filtered_confidences,
+          pipeline_result.nms_result.filtered_class_ids, input_timestamp_,
+          input_frame_id_);
 
       auto postprocess_end = std::chrono::steady_clock::now();
       auto total_end = std::chrono::steady_clock::now();
@@ -536,8 +605,9 @@ private:
               .count();
 
       // Log results in PyTorch YOLOv8 format
-      log_detection_results(detection_results, image.cols, image.rows, total_ms,
-                            preprocess_ms, inference_ms, postprocess_ms);
+      log_detection_results(pipeline_result.detection_results, image.cols,
+                            image.rows, total_ms, preprocess_ms, inference_ms,
+                            postprocess_ms);
 
     } catch (const Ort::Exception &e) {
       RCLCPP_ERROR(this->get_logger(), "ONNX Runtime inference error: %s",
@@ -547,40 +617,36 @@ private:
     return result;
   }
 
-  DetectionResults
-  process_yolo_output_no_draw(float *output_data,
-                              const std::vector<int64_t> &shape, int img_width,
-                              int img_height) {
-    std::vector<cv::Rect> boxes;
-    std::vector<float> confidences;
-    std::vector<int> class_ids;
-
-    extract_detections(output_data, shape, confidence_threshold_, img_width,
-                       img_height, boxes, confidences, class_ids,
-                       true); // apply_class_filter = true
-
-    // Apply non-maximum suppression
-    std::vector<int> indices;
-    cv::dnn::NMSBoxes(boxes, confidences, confidence_threshold_, nms_threshold_,
-                      indices);
-
-    // Collect detection results without drawing
-    DetectionResults results;
-    results.total_detections = indices.size();
-
-    for (int idx : indices) {
-      int class_id = class_ids[idx];
-      results.class_counts[class_id]++;
-    }
-
-    return results;
-  }
-
   void publish_result_image(const cv::Mat &image) {
     try {
+      // Check if image is valid before publishing
+      if (image.empty() || image.cols == 0 || image.rows == 0) {
+        RCLCPP_WARN(this->get_logger(),
+                    "Attempted to publish empty image, skipping");
+        return;
+      }
+
+      // Ensure image is in correct format
+      cv::Mat publish_image;
+      if (image.channels() == 3 && image.type() == CV_8UC3) {
+        publish_image = image;
+      } else {
+        RCLCPP_WARN(this->get_logger(),
+                    "Image format conversion needed: channels=%d, type=%d",
+                    image.channels(), image.type());
+        if (image.channels() == 1) {
+          cv::cvtColor(image, publish_image, cv::COLOR_GRAY2BGR);
+        } else if (image.channels() == 4) {
+          cv::cvtColor(image, publish_image, cv::COLOR_BGRA2BGR);
+        } else {
+          image.copyTo(publish_image);
+        }
+      }
+
       // Publish raw image only
-      auto msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", image)
-                     .toImageMsg();
+      auto msg =
+          cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", publish_image)
+              .toImageMsg();
       msg->header.stamp = this->get_clock()->now();
       msg->header.frame_id = "camera_frame";
       image_publisher_->publish(*msg);
