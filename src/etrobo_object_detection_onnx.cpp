@@ -420,10 +420,7 @@ private:
 
   cv::Mat perform_detection(const cv::Mat &image, bool draw_results = true) {
     cv::Mat result;
-    if (draw_results) {
-      result = image.clone();
-    }
-
+    
     // Timing measurements
     auto total_start = std::chrono::steady_clock::now();
     auto preprocess_start = std::chrono::steady_clock::now();
@@ -454,25 +451,55 @@ private:
       auto inference_end = std::chrono::steady_clock::now();
       auto postprocess_start = std::chrono::steady_clock::now();
 
-      // Process output and collect detection results
+      // Single unified processing: extract all detections once
       DetectionResults detection_results;
+      
       if (!output_tensors.empty()) {
         auto &output_tensor = output_tensors[0];
         auto tensor_info = output_tensor.GetTensorTypeAndShapeInfo();
         auto shape = tensor_info.GetShape();
-
         float *output_data = output_tensor.GetTensorMutableData<float>();
-        if (draw_results) {
-          detection_results = process_yolo_output_with_results(
-              result, output_data, shape, image.cols, image.rows);
-        } else {
-          detection_results = process_yolo_output_no_draw(
-              output_data, shape, image.cols, image.rows);
+
+        // Extract all detections without class filtering
+        std::vector<cv::Rect> all_boxes;
+        std::vector<float> all_confidences;
+        std::vector<int> all_class_ids;
+        extract_detections(output_data, shape, confidence_threshold_, image.cols,
+                          image.rows, all_boxes, all_confidences, all_class_ids,
+                          false); // apply_class_filter = false
+
+        // Apply NMS to all detections
+        std::vector<int> nms_indices;
+        cv::dnn::NMSBoxes(all_boxes, all_confidences, confidence_threshold_,
+                         nms_threshold_, nms_indices);
+
+        // Filter results for publishing (target_classes only)
+        std::vector<cv::Rect> filtered_boxes;
+        std::vector<float> filtered_confidences;
+        std::vector<int> filtered_class_ids;
+        for (int idx : nms_indices) {
+          if (target_classes_.empty() || target_classes_.count(all_class_ids[idx]) > 0) {
+            filtered_boxes.push_back(all_boxes[idx]);
+            filtered_confidences.push_back(all_confidences[idx]);
+            filtered_class_ids.push_back(all_class_ids[idx]);
+          }
         }
 
-        // Publish detection results
-        publish_detections(output_data, shape, image.cols, image.rows,
-                           input_timestamp_, input_frame_id_);
+        // Process detection results for logging
+        detection_results.total_detections = filtered_boxes.size();
+        for (int class_id : filtered_class_ids) {
+          detection_results.class_counts[class_id]++;
+        }
+
+        // Draw results only when needed (delayed image cloning)
+        if (draw_results) {
+          result = image.clone();
+          draw_detections_on_image(result, all_boxes, all_confidences, all_class_ids, nms_indices);
+        }
+
+        // Publish filtered detection results
+        publish_detections_from_vectors(filtered_boxes, filtered_confidences, filtered_class_ids,
+                                       input_timestamp_, input_frame_id_);
       }
 
       auto postprocess_end = std::chrono::steady_clock::now();
@@ -553,6 +580,76 @@ private:
     } catch (const std::exception &e) {
       RCLCPP_WARN(this->get_logger(), "Failed to publish result image: %s",
                   e.what());
+    }
+  }
+
+  void draw_detections_on_image(cv::Mat &image, 
+                                const std::vector<cv::Rect> &boxes,
+                                const std::vector<float> &confidences,
+                                const std::vector<int> &class_ids,
+                                const std::vector<int> &indices) {
+    for (int idx : indices) {
+      const auto &box = boxes[idx];
+      int class_id = class_ids[idx];
+      float confidence = confidences[idx];
+
+      // Draw bounding box
+      cv::rectangle(image, box, cv::Scalar(0, 255, 0), 2);
+
+      // Draw label
+      std::string class_name = getClassName(class_id);
+      std::string label = class_name + ": " + 
+                         std::to_string(static_cast<int>(confidence * 100)) + "%";
+
+      int baseline;
+      cv::Size label_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
+
+      cv::rectangle(image,
+                    cv::Point(box.x, box.y - label_size.height - 10),
+                    cv::Point(box.x + label_size.width, box.y),
+                    cv::Scalar(0, 255, 0), -1);
+
+      cv::putText(image, label, cv::Point(box.x, box.y - 5),
+                  cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 1);
+    }
+  }
+
+  void publish_detections_from_vectors(const std::vector<cv::Rect> &boxes,
+                                      const std::vector<float> &confidences,
+                                      const std::vector<int> &class_ids,
+                                      const rclcpp::Time &timestamp,
+                                      const std::string &frame_id) {
+    try {
+      // Create Detection2DArray message
+      auto detection_msg = std::make_unique<vision_msgs::msg::Detection2DArray>();
+      detection_msg->header.stamp = timestamp;
+      detection_msg->header.frame_id = frame_id.empty() ? "camera_frame" : frame_id;
+
+      // Add detections
+      for (size_t i = 0; i < boxes.size(); ++i) {
+        vision_msgs::msg::Detection2D detection;
+
+        // Set bounding box
+        detection.bbox.center.position.x = boxes[i].x + boxes[i].width / 2.0;
+        detection.bbox.center.position.y = boxes[i].y + boxes[i].height / 2.0;
+        detection.bbox.center.theta = 0.0;
+        detection.bbox.size_x = boxes[i].width;
+        detection.bbox.size_y = boxes[i].height;
+
+        // Set detection hypothesis
+        vision_msgs::msg::ObjectHypothesisWithPose hypothesis;
+        hypothesis.hypothesis.class_id = std::to_string(class_ids[i]);
+        hypothesis.hypothesis.score = confidences[i];
+        detection.results.push_back(hypothesis);
+
+        detection_msg->detections.push_back(detection);
+      }
+
+      // Publish detection results
+      detection_publisher_->publish(std::move(detection_msg));
+
+    } catch (const std::exception &e) {
+      RCLCPP_WARN(this->get_logger(), "Failed to publish detections: %s", e.what());
     }
   }
 
